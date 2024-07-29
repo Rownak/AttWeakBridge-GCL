@@ -1,2 +1,4 @@
 datasets/
 model_outputs/
+model_outputs/ics_attack/llm_finetuned_models
+model_outputs/enterprise_attack/llm_finetuned_models
