@@ -1,7 +1,7 @@
 #!/bin/bash
-
-# # Define the model_ids
-# model_ids=(0 1 2 3 4 5)
+export AWEB_DIR
+# # # Define the model_ids
+# model_ids=(4 5 6 7)
 
 # # Loop over each model_id
 # for model_id in "${model_ids[@]}"; do

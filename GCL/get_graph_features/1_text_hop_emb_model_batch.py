@@ -20,7 +20,7 @@ print(f'Using device: {device}')
 def main(model_id):
     dataset_name = config.ATTACK_DATASET
     data_dir = config.DATA_DIR
-    models = ["pt_SecRoBERTa", "SecRoBERTa", "pt_SecureBERT", "SecureBERT", "pt_gpt2-xl", "gpt2-xl"]
+    models = ["pt_SecRoBERTa", "SecRoBERTa", "pt_SecureBERT", "SecureBERT", "pt_gpt2-xl", "gpt2-xl", "pt_gpt2", "gpt2"]
     no_epoch = config.LLM_FT_EPOCH
     model_name = models[model_id]
     
@@ -51,7 +51,7 @@ def main(model_id):
     TOTAL_OBJECTS = len(doc_id_to_emb_id)
     EMBEDDING_DIM_1 = len(text_embeddings[0])
     HIDDEN_DIM = 256
-    EMBEDDING_DIM_2 = 64
+    EMBEDDING_DIM_2 = 128
     training_epochs = 200
     learning_rate = 0.001
     SCALE_FACTOR = 1

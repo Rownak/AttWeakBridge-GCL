@@ -21,8 +21,8 @@ output_dir = config.OUTPUT_DIR
 print("output_dir: ", output_dir)
 llm_dir = output_dir+"llm_finetuned_models/"
 print("llm_dir: ", llm_dir)
-models = ["jackaduma/SecRoBERTa", "ehsanaghaei/SecureBERT", "gpt2-xl"]
-model_names = ["SecRoBERTa", "SecureBERT", "gpt2-xl"]
+models = ["jackaduma/SecRoBERTa", "ehsanaghaei/SecureBERT", "gpt2-xl", "gpt2"]
+model_names = ["SecRoBERTa", "SecureBERT", "gpt2-xl", "gpt2"]
 n_epoch = config.LLM_FT_EPOCH
 
 class CustomDataset(Dataset):

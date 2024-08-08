@@ -80,10 +80,10 @@ def main():
     G.add_edges_from(edge_list)
 
     # Create and save node2vec embeddings
-    create_node2vec_embeddings(G, dimensions=64, walk_length=30, num_walks=100, window=10, min_count=1, batch_words=4, embeddings_dir=embeddings_dir)
+    create_node2vec_embeddings(G, dimensions=128, walk_length=30, num_walks=100, window=10, min_count=1, batch_words=4, embeddings_dir=embeddings_dir)
 
     # Create and save DeepWalk embeddings
-    create_deepwalk_embeddings(G, num_walks=200, walk_length=30, vector_size=256, window=5, min_count=0, sg=1, workers=4, epochs=10,embeddings_dir=embeddings_dir)
+    create_deepwalk_embeddings(G, num_walks=200, walk_length=30, vector_size=128, window=5, min_count=0, sg=1, workers=4, epochs=10,embeddings_dir=embeddings_dir)
 
 if __name__ == "__main__":
     main()

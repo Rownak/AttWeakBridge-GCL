@@ -43,17 +43,84 @@ class DualEncoder(nn.Module):
         self.graph_model1 = graph_model1
         self.graph_model2 = graph_model2
         self.fc1 = nn.Linear(text_dim, out_channels)
-        # self.fc2 = nn.Linear(feature_2_dim, feature_2_dim)
-        self.fc2 = nn.Linear(2*out_channels +feature_2_dim, hidden_dim)
+        self.fc2 = nn.Linear(feature_2_dim, feature_2_dim)
+        self.fc3 = nn.Linear(2*out_channels+2*feature_2_dim, hidden_dim)
+        # print("fc2:", 4*out_channels,"x", hidden_dim)
 
-    def forward(self, text_emb, feature_2, graph_features, edge_index):
-        graph_emb1 = self.graph_model1(graph_features, edge_index)
+    def forward(self, text_emb, feature_2, edge_index):
+        graph_emb1 = self.graph_model1(text_emb, edge_index)
         graph_emb2 = self.graph_model2(feature_2, edge_index)
+        # print("graph_emb1: ", graph_emb1.shape)
+        # print("graph_emb2: ", graph_emb2.shape)
         text_emb = self.fc1(text_emb)
-        # feature_2 = self.fc2(feature_2)
-        combined_emb = torch.cat([text_emb, graph_emb1, graph_emb2], dim=1)
-        combined_emb = self.fc2(combined_emb)
+        # print("text shape: ",text_emb.shape)
+        feature_2 = self.fc2(feature_2)
+        # print("feat shape: ",feature_2.shape)
+        combined_emb = torch.cat([text_emb,graph_emb1,feature_2, graph_emb2], dim=1)
+        # print("concat shape: ",combined_emb.shape)
+        combined_emb = self.fc3(combined_emb)
         return combined_emb
+
+def kl_divergence(p, q):
+    return torch.sum(p * (torch.log(p + 1e-10) - torch.log(q + 1e-10)), dim=1)
+
+def jensen_shannon_divergence(p, q):
+    m = 0.5 * (p + q)
+    return 0.5 * (kl_divergence(p, m) + kl_divergence(q, m))
+
+class JSDContrastiveLoss(nn.Module):
+    def __init__(self, margin=0.5):
+        super(JSDContrastiveLoss, self).__init__()
+        self.margin = margin
+
+    def forward(self, anchor, positive, negative):
+        # Normalize the embeddings to unit vectors
+        anchor_norm = F.normalize(anchor, p=2, dim=1)
+        positive_norm = F.normalize(positive, p=2, dim=1)
+        negative_norm = F.normalize(negative, p=2, dim=1)
+
+        # Convert embeddings to probability distributions
+        anchor_dist = F.log_softmax(anchor_norm, dim=1).exp()
+        positive_dist = F.log_softmax(positive_norm, dim=1).exp()
+        negative_dist = F.log_softmax(negative_norm, dim=1).exp()
+
+        # Compute JSD between anchor-positive and anchor-negative
+        jsd_pos = jensen_shannon_divergence(anchor_dist, positive_dist)
+        jsd_neg = jensen_shannon_divergence(anchor_dist, negative_dist)
+
+        # Compute the contrastive loss using JSD
+        loss = torch.relu(jsd_pos - jsd_neg).mean()
+        return loss
+class InfoNCELoss(nn.Module):
+    def __init__(self, temperature=0.07):
+        super(InfoNCELoss, self).__init__()
+        self.temperature = temperature
+
+    def forward(self, anchor, positive, negatives):
+        # print(anchor.shape)
+        # print(positive.shape)
+        # print(negatives.shape)
+        # Normalize the embeddings to unit vectors
+        anchor_norm = F.normalize(anchor, p=2, dim=1)
+        positive_norm = F.normalize(positive, p=2, dim=1)
+        negatives_norm = F.normalize(negatives, p=2, dim=2)
+
+        # Compute the positive logit
+        positive_logit = torch.sum(anchor_norm * positive_norm, dim=1) / self.temperature
+
+        # Compute the negative logits
+        negative_logits = torch.bmm(anchor_norm.unsqueeze(1), negatives_norm.transpose(1, 2)).squeeze(1) / self.temperature
+
+        # Concatenate positive logit and negative logits
+        logits = torch.cat([positive_logit.unsqueeze(1), negative_logits], dim=1)
+
+        # Create labels: 0 for the positive sample
+        labels = torch.zeros(logits.size(0), dtype=torch.long).to(anchor.device)
+
+        # Compute loss
+        loss = F.cross_entropy(logits, labels)
+
+        return loss   
 
 class ContrastiveLoss(nn.Module):
     def __init__(self, margin=0.5):
@@ -77,7 +144,7 @@ class ContrastiveLoss(nn.Module):
         return loss
         
 class ModelRunner:
-    def __init__(self, model_name, gnn_model, sample, feature):
+    def __init__(self, model_name, gnn_model, sample, feature, loss_func):
         self.gnn_model = gnn_model
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.models = ["pt_SecRoBERTa","SecRoBERTa","pt_SecureBERT","SecureBERT","pt_gpt2-xl","gpt2-xl"]
@@ -90,7 +157,8 @@ class ModelRunner:
         self.gcl_data_dir = self.result_dir + "gcl_data/" + self.model_name + "/"
         self.sample = sample
         self.margin1 = 1.0
-        self.gnn_dir = self.gcl_data_dir + 'sample_{}/{}/'.format(self.sample, self.gnn_model)
+        self.loss_func = loss_func
+        self.gnn_dir = self.gcl_data_dir + 'sample_{}/{}/{}'.format(self.sample, self.gnn_model, self.loss_func)
         
 
     def load_data(self):
@@ -98,10 +166,10 @@ class ModelRunner:
         if(self.feature_name=="text_hop"):
             self.feature_2 = np.load(self.text_emb_dir + 'text_hop_embeddings.npy')
             print("Features :",self.text_emb_dir + 'text_hop_embeddings.npy' )
-            self.out_file = '/text_hop_dual_gm_{}.npy'.format(self.margin1)
+            self.out_file = '/text_hop_dual3_gm_{}.npy'.format(self.margin1)
         else:
             self.feature_2 = np.load(self.embeddings_dir+'{}.npy'.format(self.feature_name))
-            self.out_file = '/text_{}_dual_gm_{}.npy'.format(self.feature_name,self.margin1)
+            self.out_file = '/text_{}_dual3_gm_{}.npy'.format(self.feature_name,self.margin1)
             print("Features :",self.embeddings_dir+'{}.npy'.format(self.feature_name))
             print(self.feature_2.shape)
         
@@ -153,18 +221,36 @@ class ModelRunner:
 
         print(graph_model2)
         model = DualEncoder(graph_model1, graph_model2, text_dim=text_dim, feature_2_dim=feature_2_dim,out_channels=out_channels, hidden_dim=hidden_dim).to(self.device)
-        contrastive_loss1 = ContrastiveLoss(margin=self.margin1).to(self.device)
+        if(self.loss_func=="triplet"):
+            contrastive_loss1 = ContrastiveLoss(margin=self.margin1).to(self.device)
+        elif(self.loss_func=="JSD"):
+            contrastive_loss1 = JSDContrastiveLoss(margin=self.margin1).to(self.device)
+        elif(self.loss_func=="infoNCE"):
+            contrastive_loss1 = InfoNCELoss().to(self.device)
+        optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
         optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
         num_epochs = config.GCL_EPOCH
         for epoch in range(num_epochs):
             model.train()
             optimizer.zero_grad()
-            gnn_model = model(self.node_text_embeddings,self.node_feature_2,self.node_text_embeddings, self.full_edge_index)
+            
+            gnn_model = model(self.node_text_embeddings,self.node_feature_2, self.full_edge_index)
             anchor_output = gnn_model[self.anchor_nodes]
             positive_output = gnn_model[self.positive_nodes]
             negative_output = gnn_model[self.negative_nodes]
-            loss = contrastive_loss1(anchor_output, positive_output, negative_output)
+            if self.loss_func == "triplet" or self.loss_func == "JSD":
+                negative_output = gnn_model[self.negative_nodes]
+                loss = contrastive_loss1(anchor_output, positive_output, negative_output)
+
+            elif self.loss_func == "infoNCE":
+                # negative_output = gnn_model[self.negative_nodes_infoNCE].reshape(len(self.anchor_nodes), self.window_size, -1)
+                negative_output = []
+                for neg_nodes in self.negative_nodes:
+                    x = gnn_model[neg_nodes]
+                    negative_output.append(x)
+                negative_output = torch.stack(negative_output)
+                loss = contrastive_loss1(anchor_output, positive_output,negative_output )
             loss.backward()
             optimizer.step()
             #scheduler.step()
@@ -182,11 +268,11 @@ class ModelRunner:
     def extract_embeddings(self, model, node_embeddings, node_feature_2, edge_index):
         model.eval()
         with torch.no_grad():
-            embeddings = model(node_embeddings, node_feature_2, node_embeddings, edge_index)
+            embeddings = model(node_embeddings, node_feature_2, edge_index)
         return embeddings
 
-def main(model_name, gnn_model, sample, feature):
-    runner = ModelRunner(model_name, gnn_model, sample, feature)
+def main(model_name, gnn_model, sample, feature, loss_func):
+    runner = ModelRunner(model_name, gnn_model, sample, feature, loss_func)
     runner.run()
 
 if __name__ == "__main__":
@@ -195,6 +281,7 @@ if __name__ == "__main__":
     parser.add_argument("--gnn_model", type=str, required=True, choices=["GCN", "GAT"], help="GNN Model")
     parser.add_argument("--sample", type=int, required=True, help="Sample number")
     parser.add_argument("--feature", type=str, required=True, choices=["text_hop", "node2vec", "deepwalk"], help="feature")
+    parser.add_argument("--loss", type=str, required=True, choices=["infoNCE", "triplet", "JSD", "BYOL"], help="Loss")
     args = parser.parse_args()
 
-    main(args.model_name, args.gnn_model, args.sample, args.feature)
+    main(args.model_name, args.gnn_model, args.sample, args.feature, args.loss)

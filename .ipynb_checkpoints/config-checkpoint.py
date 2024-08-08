@@ -13,9 +13,10 @@ CWE_DATASET = 'cwec_v4.12'
 # 1 - Select Full Metadata
 description_selection = 0
 LLM_FT_EPOCH = 10
-GCL_EPOCH = 200
+GCL_EPOCH = 400
     
 # Do not change
+ENCODER_PATH = ROOT_PATH+"/embedding_generator/data/encoder_decoder_model.pth"
 DATA_DIR = ROOT_PATH+"/datasets/{}/".format(ATTACK_DATASET)
 CWE_DIR = ROOT_PATH+"/datasets/cwe/"
 OUTPUT_DIR = ROOT_PATH+"/model_outputs/{}/".format(ATTACK_DATASET)
