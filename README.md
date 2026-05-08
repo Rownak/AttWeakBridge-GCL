@@ -156,6 +156,10 @@ A web interface for interacting with the trained models (located in `gradio_app/
 
 If you use this code in your research, please cite the relevant paper.
 
+Preprint: https://www.researchsquare.com/article/rs-8896676/v1
+
+This article is under review in the DMKD journal.
+
 
 ## Contact
 
