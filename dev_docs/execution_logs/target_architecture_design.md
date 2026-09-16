@@ -1,6 +1,4 @@
-# Sprint 1 — Execution Log
-
-## Phase 1.0 — Target architecture design
+# Target architecture design
 
 ### What was implemented
 
