@@ -63,3 +63,9 @@ full pipeline run on pretrained models, a tiered regression harness, and data ve
 - [x] Update `.gitignore` to reflect current working tree (remove analysis paths, demo references)
 - [x] Verify pipeline connectivity: confirm all 5 stages can be executed in order on the fixture
       (fixture data not yet generated; stages 1–5 framework in place, runnable with real data)
+- [x] Write `dev_docs/existing_architecture.md`: factual as-is documentation of the current pipeline
+      (structure, config, inputs, execution sequence, data flow, artifact inventory, cross-cutting
+      properties), verified against on-disk artifacts
+- [x] Plan `dev_docs/target_architecture.md`: dataset-agnostic target architecture for the refactor
+      (canonical graph schema, dataset adapter layer, four-pipeline layout, identity/storage strategy,
+      YAML config design)

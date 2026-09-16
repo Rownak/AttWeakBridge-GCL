@@ -272,4 +272,4 @@ def get_sample_11(weak_attack_matrix,attack_weak_matrix, graph_weak_matrix, grap
     return anchor_pos_neg_triple
 
 anchor_pos_neg_triple = get_sample_10(text_weak_attack_matrix,text_attack_weak_matrix,deepwalk_weak_matrix,deepwalk_attack_matrix, sample_no=10)
-anchor_pos_neg_triple = get_sample_11(text_weak_attack_matrix,text_attack_weak_matrix,deepwalk_weak_matrix,deepwalk_attack_matrix, sample_no=11)
+# anchor_pos_neg_triple = get_sample_11(text_weak_attack_matrix,text_attack_weak_matrix,deepwalk_weak_matrix,deepwalk_attack_matrix, sample_no=11)

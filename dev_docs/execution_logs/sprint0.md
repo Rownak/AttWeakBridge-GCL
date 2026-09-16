@@ -83,7 +83,7 @@ uv run python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_
 
 ---
 
-## Phase 0.x — Existing-architecture documentation
+## Phase 0.2 — Existing-architecture documentation
 
 ### What was implemented
 
