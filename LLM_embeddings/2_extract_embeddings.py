@@ -5,11 +5,11 @@ import numpy as np
 import argparse
 from transformers import RobertaTokenizer, RobertaForMaskedLM, AutoTokenizer, AutoModelForMaskedLM, GPT2Tokenizer, GPT2LMHeadModel
 import sys
-base_dir = os.environ['AWEB_DIR']
-sys.path.append(base_dir)
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import config
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f'Using device: {device}')
 
@@ -64,10 +64,11 @@ def retrieveEmbeddings(input_text, tokenizer, model,model_name, device):
     chunk_embeddings = []
     
     # Process text in chunks that fit within the model's limit
-    if(model_name=="pt_bert"):
-        chunk_size = 512
-    else:
+
+    if(model_name=="gpt2-xl" or model_name=="pt_gpt2-xl"):
         chunk_size = model.config.n_positions  # GPT-2's max sequence length
+    else:
+        chunk_size = 512
     for i in range(0, len(tokens), chunk_size):
         chunk_tokens = tokens[i:i + chunk_size]
         input_ids = tokenizer.convert_tokens_to_ids(chunk_tokens)

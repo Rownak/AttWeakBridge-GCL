@@ -1,0 +1,32 @@
+[project]
+name = "attweakbridge-gcl"
+version = "0.1.0"
+description = "Bridge Cybersecurity Attack Patterns and Weaknesses by Graph Contrastive Learning"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "torch>=2.4",
+    "transformers[torch]>=4.44",
+    "accelerate>=1.1.0",
+    "networkx>=3.3",
+    "torch-geometric>=2.5",
+    "numpy>=2.0",
+    "scikit-learn>=1.5",
+    "gensim>=4.3.3",
+    "matplotlib>=3.11.2",
+]
+
+[dependency-groups]
+dev = [
+    "jupyter>=1.0",
+]
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cu124" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
+explicit = true

@@ -5,8 +5,9 @@ import torch
 from torch.utils.data import Dataset
 from transformers import AutoTokenizer, AutoModelForMaskedLM, GPT2Tokenizer, GPT2LMHeadModel, DataCollatorForLanguageModeling, DataCollatorWithPadding, TrainingArguments, Trainer
 import sys
-base_dir = os.environ['AWEB_DIR']
-sys.path.append(base_dir)
+
+# Add parent directory to path to import config
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config
 
 
@@ -29,21 +30,15 @@ class CustomDataset(Dataset):
     def __init__(self, tokenizer, texts, max_length):
         self.tokenizer = tokenizer
         self.max_length = max_length
-        self.examples = []
-
-        for text in texts:
-            tokenized_text = tokenizer.encode(text)
-            for i in range(0, len(tokenized_text), max_length):
-                chunk = tokenized_text[i:i + max_length]
-                self.examples.append(chunk)
+        self.texts = texts
 
     def __len__(self):
-        return len(self.examples)
+        return len(self.texts)
 
     def __getitem__(self, idx):
-        chunk = self.examples[idx]
-        tokenized_inputs = self.tokenizer.prepare_for_model(
-            chunk,
+        text = self.texts[idx]
+        tokenized_inputs = self.tokenizer(
+            text,
             max_length=self.max_length,
             padding='max_length',
             truncation=True,
@@ -92,10 +87,10 @@ def main(model_id):
         num_train_epochs=n_epoch,
         learning_rate=1e-4,
         output_dir=os.path.join(llm_dir, model_names[model_id], 'results'),
-        logging_dir=os.path.join(llm_dir , model_names[model_id] , 'logs'),
+        # logging_dir=os.path.join(llm_dir , model_names[model_id] , 'logs'),
         logging_steps=100,
         load_best_model_at_end=False,
-        evaluation_strategy="no",
+        # evaluation_strategy="no",
         remove_unused_columns=False,
         push_to_hub=False,
         save_strategy="no",

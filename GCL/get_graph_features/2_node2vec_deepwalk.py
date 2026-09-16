@@ -5,16 +5,18 @@ import torch
 import networkx as nx
 from gensim.models import Word2Vec
 from torch_geometric.data import Data
-from node2vec import Node2Vec
 import os
 import sys
-base_dir = os.environ['AWEB_DIR']
-sys.path.append(base_dir)
+
+# Add project root to path to import config
+project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, project_root)
 import config
 
 
-# Set CUDA device and ensure the correct device is used
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+# Set CUDA device and ensure the correct device is used (default 0 for single-GPU machines;
+# override with the CUDA_VISIBLE_DEVICES env var on multi-GPU boxes).
+os.environ.setdefault("CUDA_VISIBLE_DEVICES", "0")
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f'Using device: {device}')
 
@@ -49,10 +51,53 @@ def generate_random_walks(G, num_walks, walk_length):
             walks.append(walk)
     return walks
 
+# Generate node2vec-style 2nd-order biased random walks (replaces the unmaintained
+# `node2vec` PyPI package, whose numpy<2.0 pin conflicts with torch/PyG's numpy 2.x
+# requirement). Biasing follows Grover & Leskovec (2016): at each step, the transition
+# probability back to the previous node is scaled by 1/p, to an unvisited neighbor
+# shared with the previous node by 1, and to any other neighbor by 1/q.
+def _biased_next_node(G, prev, cur, p, q):
+    neighbors = list(G.neighbors(cur))
+    if not neighbors:
+        return None
+    prev_neighbors = set(G.neighbors(prev)) if prev is not None else set()
+    weights = []
+    for nxt in neighbors:
+        if nxt == prev:
+            weights.append(1.0 / p)
+        elif nxt in prev_neighbors:
+            weights.append(1.0)
+        else:
+            weights.append(1.0 / q)
+    weights = np.array(weights, dtype=np.float64)
+    weights /= weights.sum()
+    return np.random.choice(neighbors, p=weights)
+
+def generate_biased_random_walks(G, num_walks, walk_length, p, q):
+    walks = []
+    nodes = list(G.nodes())
+    for _ in range(num_walks):
+        np.random.shuffle(nodes)
+        for node in nodes:
+            walk = [node]
+            prev = None
+            while len(walk) < walk_length:
+                cur = walk[-1]
+                next_node = _biased_next_node(G, prev, cur, p, q)
+                if next_node is None:
+                    break
+                walk.append(next_node)
+                prev = cur
+            walks.append(walk)
+    return walks
+
 # Create and save node2vec embeddings
-def create_node2vec_embeddings(G, dimensions, walk_length, num_walks, window, min_count, batch_words, embeddings_dir):
-    node2vec = Node2Vec(G, dimensions=dimensions, walk_length=walk_length, num_walks=num_walks, workers=4)
-    model = node2vec.fit(window=window, min_count=min_count, batch_words=batch_words)
+def create_node2vec_embeddings(G, dimensions, walk_length, num_walks, window, min_count, batch_words,
+                                embeddings_dir, p=1.0, q=1.0):
+    walks = generate_biased_random_walks(G, num_walks, walk_length, p, q)
+    walks = [[str(node) for node in walk] for walk in walks]
+    model = Word2Vec(sentences=walks, vector_size=dimensions, window=window, min_count=min_count,
+                      sg=1, workers=4, batch_words=batch_words)
     embeddings = np.array([model.wv[str(n)] for n in G.nodes()])
     np.save(os.path.join(embeddings_dir, 'node2vec.npy'), embeddings)
 

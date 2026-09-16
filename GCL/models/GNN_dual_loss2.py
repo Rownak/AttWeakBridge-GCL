@@ -12,6 +12,9 @@ import gc
 import sys
 import math
 import time
+# Add project root to path to import config
+project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, project_root)
 sys.path.append("../../")
 import config
 

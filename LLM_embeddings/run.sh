@@ -4,7 +4,7 @@
 # models = ["jackaduma/SecRoBERTa", "ehsanaghaei/SecureBERT", "gpt2-xl", "gpt2"]
 # model_names = ["SecRoBERTa", "SecureBERT", "gpt2-xl", "gpt2"]
 
-model_ids=(0 3)
+model_ids=(0 1)
 
 # Loop over each model_id
 for model_id in "${model_ids[@]}"; do
@@ -16,7 +16,7 @@ done
 # Define the model_ids
 # models = ["pt_SecRoBERTa", "SecRoBERTa", "pt_SecureBERT", "SecureBERT", "pt_gpt2-xl", "gpt2-xl", "pt_bert"]
 
-model_ids2=(1 5)
+model_ids2=(0 1)
 
 # Loop over each model_id
 for model_id in "${model_ids2[@]}"; do

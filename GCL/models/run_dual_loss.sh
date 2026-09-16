@@ -3,7 +3,7 @@
 # model_names=("pt_SecRoBERTa" "SecRoBERTa" "pt_SecureBERT" "SecureBERT" "pt_gpt2-xl" "gpt2-xl")
 # gnn_models=("GCN" "GAT")
 # features=("text_hop" "node2vec" "deepwalk")
-model_names=("pt_gpt2-xl" "gpt2-xl")
+model_names=("pt_SecRoBERTa")
 gnn_models=("GCN" "GAT")
 features=("node2vec" "deepwalk")
 # loss_func=("triplet" "infoNCE" "JSD" "BYOL")

@@ -2,3 +2,10 @@ datasets/
 model_outputs/
 model_outputs/ics_attack/llm_finetuned_models
 model_outputs/enterprise_attack/llm_finetuned_models
+def_docs/
+
+# uv / Python
+.venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
