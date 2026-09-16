@@ -22,48 +22,48 @@ architecture move is complete.
 
 ## Phase 1.0 — Move legacy code and data aside
 
-- [ ] `git mv` legacy source into `legacy/`: `config.py`, `data_preprocessing/`, `LLM_embeddings/`,
+- [x] `git mv` legacy source into `legacy/`: `config.py`, `data_preprocessing/`, `LLM_embeddings/`,
       `GCL/`, `run.sh`.
-- [ ] Move (filesystem, not git — these are git-ignored) `datasets/` → `legacy/datasets/` and
+- [x] Move (filesystem, not git — these are git-ignored) `datasets/` → `legacy/datasets/` and
       `model_outputs/` → `legacy/model_outputs/`.
-- [ ] Add `legacy/README.md`: one paragraph stating this is frozen pre-refactor code kept for
+- [x] Add `legacy/README.md`: one paragraph stating this is frozen pre-refactor code kept for
       reference, pointing at `dev_docs/existing_architecture.md`.
-- [ ] Update `.gitignore`: ignore `legacy/datasets/`, `legacy/model_outputs/`, and the new
+- [x] Update `.gitignore`: ignore `legacy/datasets/`, `legacy/model_outputs/`, and the new
       `data/`, `artifacts/`, `models/` roots.
-- [ ] Create the new empty tree: `src/cga/`, `configs/`, `tests/unit/`, `tests/integration/`,
+- [x] Create the new empty tree: `src/cga/`, `configs/`, `tests/unit/`, `tests/integration/`,
       `data/raw/`, `artifacts/`, `models/`.
-- [ ] Copy raw source files into the new layout: `legacy/datasets/ics_attack/attack.json` and
+- [x] Copy raw source files into the new layout: `legacy/datasets/ics_attack/attack.json` and
       `legacy/datasets/cwe/cwec_v4.12.xml` → `data/raw/attack_cwe/`;
       `benchmark/OAEI-Bio-ML/ncit-doid/` → `data/raw/ncit_doid/`.
-- [ ] Verify: `python -c "import config"` fails from repo root (legacy is isolated), and the four
+- [x] Verify: `python -c "import config"` fails from repo root (legacy is isolated), and the four
       raw files exist under `data/raw/`.
 
 ---
 
 ## Phase 1.1 — Package skeleton and `core/`
 
-- [ ] Update `pyproject.toml`: `src` layout, `[project.scripts] cga = "cga.cli:main"`, add
+- [x] Update `pyproject.toml`: `src` layout, `[project.scripts] cga = "cga.cli:main"`, add
       `pyarrow`, `pydantic>=2`, `pyyaml`, `pytest` (dev group). Run `uv sync`.
-- [ ] `core/errors.py` — `ConfigError`, `MissingInputError`, `ArtifactValidationError`.
-- [ ] `core/registry.py` — generic `Registry` class (`register(name)` decorator, `get`, `names`);
+- [x] `core/errors.py` — `ConfigError`, `MissingInputError`, `ArtifactValidationError`.
+- [x] `core/registry.py` — generic `Registry` class (`register(name)` decorator, `get`, `names`);
       one instance each for pipelines, adapters, embedders, samplers, losses.
-- [ ] `core/config.py` — YAML deep-merge layering (base → dataset → pipeline → experiment →
+- [x] `core/config.py` — YAML deep-merge layering (base → dataset → pipeline → experiment →
       `--config` → `--set`), `${paths.x}` / `${env:VAR}` interpolation, `config_hash` (sha256 of
       resolved config).
-- [ ] `core/io.py` — `read_parquet` / `write_parquet` (schema-enforcing), `read_npy` / `write_npy`,
+- [x] `core/io.py` — `read_parquet` / `write_parquet` (schema-enforcing), `read_npy` / `write_npy`,
       `read_json` / `write_json`, `sha256_file`.
-- [ ] `core/seeds.py` — `seed_everything(seed)` covering `random`, `numpy`, `torch`, `PYTHONHASHSEED`.
-- [ ] `core/logging.py` — console + per-run file handler, pipeline/step name in the format string.
-- [ ] `core/manifest.py` — `Manifest` model per §3.6, `record_input` / `record_output` with hashing,
+- [x] `core/seeds.py` — `seed_everything(seed)` covering `random`, `numpy`, `torch`, `PYTHONHASHSEED`.
+- [x] `core/logging.py` — console + per-run file handler, pipeline/step name in the format string.
+- [x] `core/manifest.py` — `Manifest` model per §3.6, `record_input` / `record_output` with hashing,
       `write()`.
-- [ ] `core/artifacts.py` — `ArtifactRef` and resolution of `latest` / explicit `run_id` / path,
+- [x] `core/artifacts.py` — `ArtifactRef` and resolution of `latest` / explicit `run_id` / path,
       reading and writing `LATEST` files.
-- [ ] `core/run.py` — `RunContext` (run_id generation per §3.5, run_dir, seed, device, logger,
+- [x] `core/run.py` — `RunContext` (run_id generation per §3.5, run_dir, seed, device, logger,
       manifest, `resolve()`).
-- [ ] `core/pipeline.py` — `Step` protocol and `Pipeline` base class: validate config, run steps in
+- [x] `core/pipeline.py` — `Step` protocol and `Pipeline` base class: validate config, run steps in
       order, write manifest, mark `status` success/failed.
-- [ ] `configs/base.yaml` per §7.2.
-- [ ] Tests: config layering and override precedence; `${}` interpolation; `config_hash` stability;
+- [x] `configs/base.yaml` per §7.2.
+- [x] Tests: config layering and override precedence; `${}` interpolation; `config_hash` stability;
       registry duplicate-name error; `seed_everything` reproducibility; `ArtifactRef` resolution of
       `latest`.
 

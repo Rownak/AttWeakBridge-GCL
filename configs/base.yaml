@@ -1,0 +1,16 @@
+project: cga
+seed: 42
+device: auto              # auto | cpu | cuda:0
+
+paths:
+  raw: data/raw
+  processed: data/processed
+  artifacts: artifacts
+  models: models
+
+logging:
+  level: INFO
+  file: true              # also write {run_dir}/run.log
+
+run:
+  name: null               # optional human alias; run_id is always generated
