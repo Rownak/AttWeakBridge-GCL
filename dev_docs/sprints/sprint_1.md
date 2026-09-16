@@ -71,18 +71,18 @@ architecture move is complete.
 
 ## Phase 1.2 — Canonical data layer
 
-- [ ] `data/ids.py` — `make_node_id(graph_key, source_id)`, `parse_node_id`, validation (no colon in
+- [x] `data/ids.py` — `make_node_id(graph_key, source_id)`, `parse_node_id`, validation (no colon in
       `graph_key`).
-- [ ] `data/schemas.py` — pyarrow schemas + pydantic row models for `nodes`, `edges`, `texts`,
+- [x] `data/schemas.py` — pyarrow schemas + pydantic row models for `nodes`, `edges`, `texts`,
       `alignments`, `examples`, `status`, `index`, `universe` (§6.1–6.6).
-- [ ] `data/graph_store.py` — read/write the four ingest tables with pk-uniqueness and FK checks
+- [x] `data/graph_store.py` — read/write the four ingest tables with pk-uniqueness and FK checks
       (`edges.{src,dst} ⊂ nodes`, same `graph_role`; `alignments` endpoints in opposite roles).
-- [ ] `data/aligned.py` — `AlignedMatrix` (`load` with validation, `row_of`, `select`, `save`) and
+- [x] `data/aligned.py` — `AlignedMatrix` (`load` with validation, `row_of`, `select`, `save`) and
       `NodeUniverse` (ordered `node_id` + `graph_role`, `from_parquet`, `save`).
-- [ ] `data/embedding_store.py` — shard append, `status.parquet` upsert, `materialize()` →
+- [x] `data/embedding_store.py` — shard append, `status.parquet` upsert, `materialize()` →
       `vectors.npy` + `index.parquet`, `pending_nodes()` for resume.
-- [ ] `data/example_store.py` — write/read `examples.parquet` with FK checks against a universe.
-- [ ] Tests: `node_id` round-trip and rejection of bad input; schema violation raises on write;
+- [x] `data/example_store.py` — write/read `examples.parquet` with FK checks against a universe.
+- [x] Tests: `node_id` round-trip and rejection of bad input; schema violation raises on write;
       FK violation raises; `AlignedMatrix.select` reorders correctly and raises on a missing id;
       `EmbeddingStore` resume leaves `ok` rows untouched and re-runs `failed` ones;
       materialize excludes non-`ok` rows and keeps `index` aligned.

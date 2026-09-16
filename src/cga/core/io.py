@@ -38,7 +38,7 @@ def write_parquet(table: pa.Table, path: str | Path, schema: pa.Schema | None = 
     if schema is not None and not table.schema.equals(schema, check_metadata=False):
         try:
             table = table.cast(schema)
-        except (pa.ArrowInvalid, pa.ArrowTypeError) as exc:
+        except (pa.ArrowInvalid, pa.ArrowTypeError, ValueError) as exc:
             raise ArtifactValidationError(
                 f"Table schema does not match expected schema for {path}: {exc}"
             ) from exc

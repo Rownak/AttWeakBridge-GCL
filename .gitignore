@@ -3,9 +3,9 @@ legacy/model_outputs/
 def_docs/
 
 # New architecture directories
-data/
-artifacts/
-models/
+/data/
+/artifacts/
+/models/
 
 # uv / Python
 .venv/
