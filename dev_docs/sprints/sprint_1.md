@@ -202,41 +202,83 @@ from similarity/sampling.
 
 ## Phase 1.7 — `gcl_train` pipeline
 
-- [ ] `pipelines/gcl_train/models.py` — `DualEncoder` with GCN and GAT towers (port from
+- [x] `pipelines/gcl_train/models.py` — `DualEncoder` with GCN and GAT towers (port from
       `legacy/GCL/models/GNN_dual_loss2.py`).
-- [ ] `pipelines/gcl_train/losses.py` — `triplet`, `jsd`, `infonce`, registered.
-- [ ] `pipelines/gcl_train/trainer.py` — full-batch loop, `alpha·L_text + (1−alpha)·L_graph`,
+- [x] `pipelines/gcl_train/losses.py` — `triplet`, `infonce`, registered. `jsd` was deliberately
+      dropped in this port (decided with the developer): the legacy JSD loss treats a softmax over an
+      L2-normalized embedding's dimensions as a probability distribution, which has no principled
+      interpretation, and the architecture's `jsd` mention was not worth carrying that approximation
+      forward for.
+- [x] `pipelines/gcl_train/trainer.py` — full-batch loop, `alpha·L_text + (1−alpha)·L_graph`,
       `metrics.jsonl` per epoch, checkpoints embedding `universe_sha256`.
-- [ ] `pipelines/gcl_train/pipeline.py` — `load` (select every matrix onto the universe, remap ids →
+- [x] `pipelines/gcl_train/pipeline.py` — `load` (select every matrix onto the universe, remap ids →
       rows) → `train` → `export` → `manifest`. No evaluation step: that is Phase 1.8.
-- [ ] `configs/pipelines/gcl_train.yaml` per §7.8 (`monitor` block disabled by default) and
-      `configs/experiments/attack_cwe_secroberta_gcn.yaml` per §7.10.
-- [ ] Tests: each loss against hand-computed values; `load` raises when an example id is outside the
+- [x] `configs/pipelines/gcl_train.yaml` per §7.8 (`monitor` block disabled by default, `loss.name`
+      restricted to `triplet | infonce`) and `configs/experiments/attack_cwe_secroberta_gcn.yaml` per
+      §7.10.
+- [x] Tests: each loss against hand-computed values; `load` raises when an example id is outside the
       universe; checkpoint refuses to load against a mismatched `universe_sha256`.
-- [ ] Verify: `cga run gcl_train --dataset attack_cwe --set gcl_train.train.epochs=5` produces
-      `node_embeddings/` shape `(1136, 128)` and `metrics.jsonl` with 5 rows.
+- [x] Verify: `cga run gcl_train --dataset attack_cwe --set gcl_train.train.epochs=5` produces
+      `node_embeddings/` shape `(1136, 128)` and `metrics.jsonl` with 5 rows (loss decreased
+      monotonically 0.85 → 0.46 across the 5 epochs, confirming the loop is actually learning).
 
 ---
 
-## Phase 1.8 — `evaluate` pipeline
+<!-- Full alignment `evaluate` pipeline (Pipeline 5, §5.5/§8.4 — Hits@k/MRR over alignment pairs,
+     silhouette/similarity-distribution diagnostics) is deferred: out of scope for the paper, and
+     `attack_cwe` has no alignments to rank against anyway. Revisit post-paper. -->
 
-- [ ] `pipelines/evaluate/ranking.py` — Hits@k / MRR over the full `graph_2` node set and over the
-      candidate pool when the dataset supplies one.
-- [ ] `pipelines/evaluate/diagnostics.py` — silhouette over `graph_role`, cross-graph similarity
-      distribution, nearest-cross-graph-neighbour samples; each reported over all nodes **and**
-      restricted to the `test` split (§8.4), so `attack_cwe` gets a held-out number despite having
-      no alignment ground truth.
-- [ ] `pipelines/evaluate/pipeline.py` — `load` (resolve the `gcl_train` run and follow its manifest
-      chain back to `nodes.parquet` / `splits.parquet` / `alignments.parquet`) → `rank` → `diagnose` →
-      `validate_and_manifest`, writing `artifacts/evaluations/{dataset_id}/{run_id}/` per §5.5.
-- [ ] `configs/pipelines/evaluate.yaml` per §7.9.
-- [ ] Wire `gcl_train.monitor` to call `ranking.py` in-loop when enabled, appending
-      `{"epoch": …, "eval": {…}}` to `metrics.jsonl`.
-- [ ] Tests: Hits@k / MRR on a toy ranking with a known answer; `rank` no-ops cleanly with zero
-      alignments while `diagnose` still runs; diagnostics restricted to `test` differ from the
-      all-node figures on a fixture where they should; `load` raises when the manifest chain is broken.
-- [ ] Verify: `cga run evaluate --dataset attack_cwe` on the Phase 1.6 run writes `metrics.json`
-      with all-node and `test`-split diagnostics and no ranking block.
+## Phase 1.8 — Exploratory analysis in the `evaluate` pipeline
+
+Not the alignment-metrics pipeline from §5.5/§8.4 (deferred — see note above). This phase is a
+lighter, paper-focused rewrite of `legacy/GCL/gcl_analysis/2_precision@k_text_graph.py`: does the
+learned embedding preserve the neighborhoods that text similarity and graph/structural similarity
+already define? `1_tsne_plot.py`'s t-SNE plots are ported as optional visualization only, never a
+metric. `3_top_pairs_text_graph.py` is skipped entirely — out of scope.
+
+Two independent reference views, each scored the same way:
+
+- **Text preservation** — reference neighborhood = top-k by cosine similarity in the text-embedding
+  space (e.g. SecBERT/GPT text embeddings). Query = learned node embedding. For each node, does the
+  learned embedding's top-k retrieve the text reference's top-k?
+- **Structural preservation** — reference neighborhood = top-k by cosine similarity in the
+  graph/structural-embedding space (DeepWalk, node2vec) or shortest-path-derived similarity. Same
+  retrieval question, structural reference instead of text.
+
+Relevance label for both views: node `j` is "relevant" to query node `i` iff `j` is in `i`'s
+reference top-k (text or structural, per view). Retrieval direction is always *learned embedding →
+reference top-k*, never the reverse — this measures whether the learned space preserves an existing
+neighborhood, not whether the reference recovers the learned one.
+
+Metrics, computed per view (text, structural), each restricted to same-`graph_role` comparisons
+(`attack`↔`attack`, `cwe`↔`cwe`) matching the legacy split, and reported per `k`:
+
+- **Precision@k** — `|top_k(learned) ∩ top_k(reference)| / k`, averaged over nodes. Interpretation:
+  fraction of the learned neighborhood that agrees with the reference neighborhood.
+- **Hit@k** — 1 if the reference's single nearest neighbor (k=1 relevant item) appears in the
+  learned top-k, else 0, averaged over nodes. Interpretation: how often the single most-relevant
+  reference node is retrievable at all within budget k.
+- **MRR** — mean of `1/rank` of the reference's nearest neighbor within the learned ranking,
+  averaged over nodes. Interpretation: how highly the single most-relevant reference node is ranked,
+  not just whether it made the cutoff.
+
+- [ ] `pipelines/evaluate/metrics.py` — `precision_at_k`, `hit_at_k`, `mrr`, all taking a learned
+      similarity matrix and a reference similarity matrix (or reference top-k indices) plus `ks`;
+      pure functions, no I/O.
+- [ ] `pipelines/evaluate/reference_neighborhoods.py` — build text and structural reference
+      similarity from the `embed` pipeline's stores (no separate reference model to train).
+- [ ] `pipelines/evaluate/visualize.py` — optional t-SNE scatter of learned embeddings colored by
+      `graph_role`, ported from `1_tsne_plot.py::tsne_plot1`; explicitly not used for metrics.
+- [ ] `pipelines/evaluate/pipeline.py` — `load` (learned embeddings via `gcl_train` manifest chain,
+      plus text/structural embedding stores) → `score` (metrics.py over both views, all `ks`) →
+      `visualize` (optional) → `validate_and_manifest`, writing
+      `artifacts/evaluations/{dataset_id}/{run_id}/metrics.json` (+ `plots/` if enabled).
+- [ ] `configs/pipelines/evaluate.yaml` — `ks`, `views: [text, structural]`, `visualize.enabled`.
+- [ ] Tests: `precision_at_k`/`hit_at_k`/`mrr` on hand-built toy similarity matrices with known
+      answers; same-`graph_role` restriction excludes cross-role pairs; `score` is order-independent
+      w.r.t. how reference top-k ties are broken (documented, not silently nondeterministic).
+- [ ] Verify: `cga run evaluate --dataset attack_cwe` on the Phase 1.7 run writes `metrics.json` with
+      precision@k/hit@k/MRR for both text and structural views across configured `ks`.
 
 ---
 

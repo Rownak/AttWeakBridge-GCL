@@ -589,6 +589,32 @@ Because it reads only the exported `AlignedMatrix`, this pipeline evaluates any 
 older run, a checkpoint re-export, or eventually a model pulled from an MLflow registry — without
 touching `gcl_train`.
 
+**Deferred (post-paper).** The paper does not use alignment-pair metrics — `attack_cwe` has no
+alignments to rank against — so this pipeline as specified above is not implemented in Sprint 1.
+What ships instead, in the same `evaluate` slot, is §5.5a below.
+
+### 5.5a `evaluate` (paper scope) — neighborhood-preservation metrics
+
+Answers a narrower question than §5.5: does the learned embedding preserve neighborhoods that
+already exist in the text-similarity and graph/structural-similarity spaces? This is a
+quantitative rewrite of the legacy `gcl_analysis/2_precision@k_text_graph.py` notebook script, not
+an alignment-ranking evaluation.
+
+- **Two reference views**, scored independently: **text** (reference = cosine top-k over text
+  embeddings) and **structural** (reference = cosine top-k over DeepWalk/node2vec embeddings, or
+  shortest-path similarity). Comparisons are restricted to same-`graph_role` pairs.
+- **Retrieval direction** is always learned embedding → reference top-k: for each node, does the
+  learned space's neighborhood agree with the neighborhood the reference already defines? Never the
+  reverse.
+- **Relevance label**: node `j` is relevant to query `i` iff `j ∈ reference_top_k(i)`, per view.
+- **Metrics**, per view and per `k`: **Precision@k** (overlap fraction between learned and
+  reference top-k), **Hit@k** (whether the reference's nearest neighbor lands in the learned top-k),
+  **MRR** (mean reciprocal rank of the reference's nearest neighbor in the learned ranking).
+- **t-SNE plots** (ported from `gcl_analysis/1_tsne_plot.py`) are optional embedding visualization
+  only — never used as a metric. The legacy `3_top_pairs_text_graph.py` analysis is not ported.
+
+See `dev_docs/sprints/sprint_1.md` Phase 1.8 for the task breakdown.
+
 ---
 
 ## 6. Data schemas

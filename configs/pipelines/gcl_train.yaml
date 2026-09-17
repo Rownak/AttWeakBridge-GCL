@@ -1,0 +1,30 @@
+# target_architecture.md §7.8
+gcl_train:
+  inputs:
+    training_data_run: latest       # embeddings + universe resolved from its manifest
+  model:
+    encoder: gcn                    # gcn | gat
+    hidden_dim: 128
+    out_dim: 128
+    gat_heads: [8, 1]
+    dropout: 0.0
+  loss:
+    name: triplet                   # triplet | infonce
+    margin: 1.0
+    alpha: 0.5                      # text-view weight
+    temperature: 0.1                # infonce only
+  optim: {name: adam, lr: 1.0e-3, weight_decay: 0.0}
+  train:
+    epochs: 400
+    checkpoint_every: 50
+    log_every: 10
+  monitor:
+    enabled: false                  # in-loop progress metrics only, appended to metrics.jsonl;
+    every: 50                       # authoritative results come from `cga run evaluate`
+    ks: [1, 5, 10]
+
+# Note: legacy GNN_dual_loss2.py also offered a `jsd` (Jensen-Shannon
+# divergence over softmax'd embeddings) loss. It is not ported here — softmax
+# over an L2-normalized embedding's dimensions has no principled probability
+# interpretation, and carrying that approximation forward was not worth the
+# added surface area. Only `triplet` and `infonce` are registered losses.
