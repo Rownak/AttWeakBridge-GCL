@@ -1,8 +1,8 @@
 """``ingest`` pipeline: dataset adapter -> canonical graph artifacts (target_architecture.md §5.1).
 
-The only dataset-aware pipeline — and only through the adapter registry. Six
-steps drain a `DatasetAdapter`'s iterators into the four canonical Parquet
-tables under ``data/processed/{dataset_id}/{run_id}/``, enforcing schema,
+The only dataset-aware pipeline — and only through the adapter registry. Seven
+steps drain a `DatasetAdapter`'s iterators into the canonical Parquet tables
+under ``data/processed/{dataset_id}/{run_id}/``, enforcing schema,
 primary-key uniqueness, and FK/role integrity via ``cga.data.graph_store``.
 """
 
@@ -23,8 +23,9 @@ from cga.core.pipeline import Pipeline, Step
 from cga.core.registry import adapters as adapter_registry
 from cga.core.registry import pipelines
 from cga.core.run import RunContext
-from cga.data.graph_store import write_alignments, write_edges, write_nodes, write_texts
-from cga.data.schemas import ALIGNMENTS_SCHEMA, EDGES_SCHEMA, NODES_SCHEMA, TEXTS_SCHEMA
+from cga.data.graph_store import write_alignments, write_edges, write_nodes, write_splits, write_texts
+from cga.data.schemas import ALIGNMENTS_SCHEMA, EDGES_SCHEMA, NODES_SCHEMA, SPLITS_SCHEMA, TEXTS_SCHEMA
+from cga.pipelines.ingest.splitter import split_nodes
 
 
 class _IngestState:
@@ -36,6 +37,7 @@ class _IngestState:
         self.edges_table: pa.Table | None = None
         self.texts_table: pa.Table | None = None
         self.alignments_table: pa.Table | None = None
+        self.splits_table: pa.Table | None = None
         self.n_dropped_edges: int = 0
         self.output_dir: Path | None = None
 
@@ -174,6 +176,42 @@ class IngestAlignmentsStep:
         ctx.logger.info("ingest_alignments: wrote %d alignment rows", table.num_rows)
 
 
+class SplitNodesStep:
+    """Step 6: assign every node a train/val/test split (§5.1.1), write ``splits.parquet``."""
+
+    name = "split_nodes"
+
+    def __init__(self, state: _IngestState) -> None:
+        self._state = state
+
+    def run(self, ctx: RunContext) -> None:
+        assert self._state.nodes_table is not None
+        cfg = ctx.config.get("ingest", {}).get("split", {})
+        fractions = cfg.get("fractions", [0.8, 0.1, 0.1])
+        seed = cfg.get("seed") or ctx.seed
+
+        node_ids_by_role: dict[str, list[str]] = {"graph_1": [], "graph_2": []}
+        for node_id, role in zip(
+            self._state.nodes_table.column("node_id").to_pylist(),
+            self._state.nodes_table.column("graph_role").to_pylist(),
+        ):
+            node_ids_by_role[role].append(node_id)
+
+        split_by_node = split_nodes(node_ids_by_role, fractions=fractions, seed=seed)
+
+        rows = [
+            {"node_id": node_id, "graph_role": role, "split": split_by_node[node_id]}
+            for node_id, role in zip(
+                self._state.nodes_table.column("node_id").to_pylist(),
+                self._state.nodes_table.column("graph_role").to_pylist(),
+            )
+        ]
+        table = pa.Table.from_pylist(rows, schema=SPLITS_SCHEMA)
+        write_splits(table, self._state.output_dir / "splits.parquet", nodes=self._state.nodes_table)
+        self._state.splits_table = table
+        ctx.logger.info("split_nodes: wrote %d split rows (fractions=%s, seed=%s)", table.num_rows, fractions, seed)
+
+
 def _degree_summary(edges_table: pa.Table) -> dict[str, float]:
     if edges_table.num_rows == 0:
         return {"mean_degree": 0.0, "max_degree": 0}
@@ -188,7 +226,7 @@ def _degree_summary(edges_table: pa.Table) -> dict[str, float]:
 
 
 class ValidateAndManifestStep:
-    """Step 6: write ``stats.json``, update ``LATEST``, record outputs."""
+    """Step 7: write ``stats.json``, update ``LATEST``, record outputs."""
 
     name = "validate_and_manifest"
 
@@ -202,6 +240,7 @@ class ValidateAndManifestStep:
             and state.edges_table is not None
             and state.texts_table is not None
             and state.alignments_table is not None
+            and state.splits_table is not None
         )
 
         nodes_by_role: dict[str, int] = {}
@@ -218,6 +257,14 @@ class ValidateAndManifestStep:
         for split in state.alignments_table.column("split").to_pylist():
             alignment_split_counts[split] = alignment_split_counts.get(split, 0) + 1
 
+        node_split_counts_by_role: dict[str, dict[str, int]] = {}
+        for role, split in zip(
+            state.splits_table.column("graph_role").to_pylist(),
+            state.splits_table.column("split").to_pylist(),
+        ):
+            by_split = node_split_counts_by_role.setdefault(role, {})
+            by_split[split] = by_split.get(split, 0) + 1
+
         stats = {
             "n_nodes": state.nodes_table.num_rows,
             "n_nodes_by_graph_role": nodes_by_role,
@@ -229,6 +276,7 @@ class ValidateAndManifestStep:
             "degree": _degree_summary(state.edges_table),
             "n_alignments": state.alignments_table.num_rows,
             "n_alignments_by_split": alignment_split_counts,
+            "n_nodes_by_split_by_graph_role": node_split_counts_by_role,
         }
         stats_path = state.output_dir / "stats.json"
         write_json(stats, stats_path)
@@ -238,6 +286,7 @@ class ValidateAndManifestStep:
             ("edges", state.output_dir / "edges.parquet"),
             ("texts", state.output_dir / "texts.parquet"),
             ("alignments", state.output_dir / "alignments.parquet"),
+            ("splits", state.output_dir / "splits.parquet"),
             ("stats", stats_path),
         ):
             ctx.manifest.record_output(name, path)
@@ -251,7 +300,7 @@ class ValidateAndManifestStep:
 
 @pipelines.register("ingest")
 class IngestPipeline(Pipeline):
-    """Runs the selected dataset adapter and writes the four canonical tables + ``stats.json``."""
+    """Runs the selected dataset adapter and writes the five canonical tables + ``stats.json``."""
 
     name = "ingest"
 
@@ -264,6 +313,7 @@ class IngestPipeline(Pipeline):
             IngestEdgesStep(state),
             IngestTextsStep(state),
             IngestAlignmentsStep(state),
+            SplitNodesStep(state),
             ValidateAndManifestStep(state),
         ]
 

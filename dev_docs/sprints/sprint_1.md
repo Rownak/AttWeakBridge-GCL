@@ -137,23 +137,70 @@ architecture move is complete.
 
 ## Phase 1.5 — `training_data` pipeline
 
-- [ ] `pipelines/training_data/similarity.py` — cosine matrices, cross-graph (text) and within-graph
-      (structural), driven by `graph_role`.
-- [ ] `pipelines/training_data/samplers.py` — `rank_topk`, `percentile`, `supervised`; all registered
+- [x] `pipelines/training_data/similarity.py` — cosine matrices, cross-graph (text) and within-graph
+      (structural), driven by `graph_role`, computed only over `held_out == False` universe rows.
+- [x] `pipelines/training_data/samplers.py` — `rank_topk`, `percentile`, `supervised`; all registered
       and seeded.
-- [ ] `pipelines/training_data/pipeline.py` — `build_universe` (intersection policy) → `similarity`
-      → `sample` → `split` → `validate_and_manifest`.
-- [ ] `configs/pipelines/training_data.yaml` per §7.6.
-- [ ] Tests: `build_universe` excludes non-`ok` nodes from either store; each sampler on a small
-      hand-built similarity matrix produces the expected pairs; sampler output is reproducible under
-      a fixed seed; `supervised` sampler no-ops when `alignments.parquet` is empty;
-      `split: from_alignments` keeps test-alignment nodes out of train examples.
-- [ ] Verify: `cga run training_data --dataset attack_cwe` produces `universe.parquet` (1,136 rows)
+- [x] `pipelines/training_data/pipeline.py` — `build_universe` (intersection policy; also computes
+      `held_out` from `alignments.parquet`'s `test` split per the corrected §5.3 step 1) →
+      `similarity` → `sample` → `split` → `validate_and_manifest` (includes the leakage assertion
+      that no `test`-split alignment node appears in `examples.parquet`).
+- [x] `configs/pipelines/training_data.yaml` per §7.6 as numbered then (now §7.7), including
+      `held_out_splits` — that key is removed again in Phase 1.5a.
+- [x] Tests: `build_universe` excludes non-`ok` nodes from either store, and correctly flags
+      `held_out` from alignment `test` rows; each sampler on a small hand-built similarity matrix
+      produces the expected pairs; `rank_topk`/`percentile` never draw a `held_out` node as
+      anchor/positive/negative; sampler output is reproducible under a fixed seed; `supervised`
+      sampler no-ops when `alignments.parquet` is empty; `validate_and_manifest` raises if a
+      test-alignment node id appears anywhere in `examples.parquet`.
+- [x] Verify: `cga run training_data --dataset attack_cwe` produces `universe.parquet` (1,136 rows)
       and a non-empty `examples.parquet` whose ids all resolve in the universe.
+
+> **Superseded in part by Phase 1.5a.** As shipped, `held_out` was derived *only* from
+> `alignments.parquet`, so `attack_cwe` (no alignments) had no held-out nodes and no test split at
+> all. Phase 1.5a moves the partition into `ingest` and makes it uniform across datasets.
 
 ---
 
-## Phase 1.6 — `gcl_train` pipeline
+## Phase 1.6 — Per-node `train`/`val`/`test` split
+
+Motivated by the gap above: `attack_cwe` had no held-out set, and `ncit_doid`'s node-level
+eligibility was derived from alignment pairs rather than from a node partition. Architecture
+amended in §5.1.1, §5.3, §6.5, §6.7, §7.5, §7.7, §8.4.
+
+**Policy** (decided with the developer): proportional per graph, **identical for every dataset** —
+each `graph_role` independently partitioned ~80/10/10 by a seeded shuffle. A dataset's own
+alignment split does **not** override the node partition. Both `val` and `test` nodes are excluded
+from similarity/sampling.
+
+- [x] `data/schemas.py` — `SPLITS_SCHEMA` / `SplitRecord` per §6.5 (`node_id` pk, `graph_role`,
+      `split`); add `split` to `UNIVERSE_SCHEMA` alongside the existing `held_out`.
+- [x] `data/graph_store.py` — `write_splits` / `read_splits` with FK check against `nodes.parquet`
+      and a completeness check (exactly one row per node).
+- [x] `pipelines/ingest/splitter.py` — seeded proportional per-`graph_role` partition; validates
+      `fractions` sums to 1.0; deterministic given `(nodes, fractions, seed)`.
+- [x] `pipelines/ingest/pipeline.py` — new `split_nodes` step (§5.1 step 6) writing
+      `splits.parquet`; per-split-per-graph counts into `stats.json`.
+- [x] `configs/pipelines/ingest.yaml` — `split.fractions` / `split.seed` per §7.5.
+- [x] `pipelines/training_data/pipeline.py` — `build_universe` reads `splits.parquet`, carries
+      `split` onto `universe.parquet`, and computes
+      `held_out = split in {val, test} or node in alignment test pair` (§5.3 step 1); `supervised`
+      sampler restricted to `train`-split endpoints; renamed the old `split` step to
+      `assign_example_split`, inheriting each example's split from its anchor.
+- [x] `configs/pipelines/training_data.yaml` — drop `held_out_splits` and the `split` block (both
+      now owned by `ingest`).
+- [x] Tests: fractions produce the expected per-graph counts and sum to the node total; the split is
+      reproducible under a fixed seed and changes with a different one; every node appears exactly
+      once; `build_universe` marks `val`/`test` nodes `held_out`; `ncit_doid`-shaped fixture with an
+      OAEI `test` alignment pair whose endpoints landed in our `train` split still marks them
+      `held_out` (the union rule); examples never reference a `held_out` node.
+- [x] Verify: re-run `ingest` + `training_data` for `attack_cwe`; `splits.parquet` shows ~80/10/10
+      within **both** `attack` and `cwe`; `examples.parquet` anchors are all `train`-split; record
+      the new example count (it will drop from 34,080, since ~20% of anchors are now held out).
+
+---
+
+## Phase 1.7 — `gcl_train` pipeline
 
 - [ ] `pipelines/gcl_train/models.py` — `DualEncoder` with GCN and GAT towers (port from
       `legacy/GCL/models/GNN_dual_loss2.py`).
@@ -161,9 +208,9 @@ architecture move is complete.
 - [ ] `pipelines/gcl_train/trainer.py` — full-batch loop, `alpha·L_text + (1−alpha)·L_graph`,
       `metrics.jsonl` per epoch, checkpoints embedding `universe_sha256`.
 - [ ] `pipelines/gcl_train/pipeline.py` — `load` (select every matrix onto the universe, remap ids →
-      rows) → `train` → `export` → `manifest`. No evaluation step: that is Phase 1.7.
-- [ ] `configs/pipelines/gcl_train.yaml` per §7.7 (`monitor` block disabled by default) and
-      `configs/experiments/attack_cwe_secroberta_gcn.yaml` per §7.9.
+      rows) → `train` → `export` → `manifest`. No evaluation step: that is Phase 1.8.
+- [ ] `configs/pipelines/gcl_train.yaml` per §7.8 (`monitor` block disabled by default) and
+      `configs/experiments/attack_cwe_secroberta_gcn.yaml` per §7.10.
 - [ ] Tests: each loss against hand-computed values; `load` raises when an example id is outside the
       universe; checkpoint refuses to load against a mismatched `universe_sha256`.
 - [ ] Verify: `cga run gcl_train --dataset attack_cwe --set gcl_train.train.epochs=5` produces
@@ -171,26 +218,29 @@ architecture move is complete.
 
 ---
 
-## Phase 1.7 — `evaluate` pipeline
+## Phase 1.8 — `evaluate` pipeline
 
 - [ ] `pipelines/evaluate/ranking.py` — Hits@k / MRR over the full `graph_2` node set and over the
       candidate pool when the dataset supplies one.
 - [ ] `pipelines/evaluate/diagnostics.py` — silhouette over `graph_role`, cross-graph similarity
-      distribution, nearest-cross-graph-neighbour samples.
+      distribution, nearest-cross-graph-neighbour samples; each reported over all nodes **and**
+      restricted to the `test` split (§8.4), so `attack_cwe` gets a held-out number despite having
+      no alignment ground truth.
 - [ ] `pipelines/evaluate/pipeline.py` — `load` (resolve the `gcl_train` run and follow its manifest
-      chain back to `nodes.parquet` / `alignments.parquet`) → `rank` → `diagnose` →
+      chain back to `nodes.parquet` / `splits.parquet` / `alignments.parquet`) → `rank` → `diagnose` →
       `validate_and_manifest`, writing `artifacts/evaluations/{dataset_id}/{run_id}/` per §5.5.
-- [ ] `configs/pipelines/evaluate.yaml` per §7.8.
+- [ ] `configs/pipelines/evaluate.yaml` per §7.9.
 - [ ] Wire `gcl_train.monitor` to call `ranking.py` in-loop when enabled, appending
       `{"epoch": …, "eval": {…}}` to `metrics.jsonl`.
 - [ ] Tests: Hits@k / MRR on a toy ranking with a known answer; `rank` no-ops cleanly with zero
-      alignments while `diagnose` still runs; `load` raises when the manifest chain is broken.
+      alignments while `diagnose` still runs; diagnostics restricted to `test` differ from the
+      all-node figures on a fixture where they should; `load` raises when the manifest chain is broken.
 - [ ] Verify: `cga run evaluate --dataset attack_cwe` on the Phase 1.6 run writes `metrics.json`
-      with diagnostics and no ranking block.
+      with all-node and `test`-split diagnostics and no ranking block.
 
 ---
 
-## Phase 1.8 — Finalize
+## Phase 1.9 — Finalize
 
 - [ ] `pipelines/embed/finetune.py` — MLM/CLM continued pretraining → `models/llm/{slug}/{run_id}/`,
       wired as the optional first `embed` step.

@@ -420,8 +420,8 @@ version, and DVC re-run evaluation as its own stage, without retraining.
 | | |
 |---|---|
 | **Inputs** | `data/raw/{dataset_id}/…` as declared by the adapter's config |
-| **Config** | `dataset.adapter` (registry key), adapter-specific block, text-variant selection, edge relation filters |
-| **Outputs** → `data/processed/{dataset_id}/{run_id}/` | `nodes.parquet`, `edges.parquet`, `texts.parquet`, `alignments.parquet` (empty if none), `stats.json`, `manifest.json` |
+| **Config** | `dataset.adapter` (registry key), adapter-specific block, text-variant selection, edge relation filters, `split` fractions/seed |
+| **Outputs** → `data/processed/{dataset_id}/{run_id}/` | `nodes.parquet`, `edges.parquet`, `texts.parquet`, `alignments.parquet` (empty if none), `splits.parquet`, `stats.json`, `manifest.json` |
 
 Steps:
 
@@ -435,12 +435,46 @@ Steps:
    text.
 5. `ingest_alignments` — drain `iter_alignments()`; assert endpoints exist and are in opposite
    graphs.
-6. `validate_and_manifest` — schema/FK/uniqueness checks, `stats.json` (per-graph node and edge
-   counts, text coverage, degree summary, alignment counts per split), `LATEST`.
+6. `split_nodes` — assign every node a `split ∈ {train, val, test}` → `splits.parquet` (§6.5).
+7. `validate_and_manifest` — schema/FK/uniqueness checks, `stats.json` (per-graph node and edge
+   counts, text coverage, degree summary, alignment counts per split, node counts per split per
+   graph), `LATEST`.
 
 Node-set policy: **all** parsed entities are written. The legacy "drop description-less nodes"
 filter moves downstream (embedding status + `NodeUniverse`), so exclusions are recorded with a
 reason instead of silently shifting indices.
+
+#### 5.1.1 Node splitting
+
+Split membership is a property of the **dataset**, not of a training run: the same partition must
+be used by every `training_data` run built on this ingest run, and by the `evaluate` run that
+eventually scores a model trained from it. Computing it once here — rather than redrawing it inside
+`training_data` — is what makes that guarantee mechanical rather than conventional, and is why
+`splits.parquet` sits beside the other canonical tables in `data/processed/`.
+
+The policy is **proportional per graph**, identical for every dataset:
+
+- For each `graph_role` **independently**, nodes are shuffled with `seed` and partitioned into
+  `train`/`val`/`test` by `split.fractions` (default `[0.8, 0.1, 0.1]`). Each graph therefore
+  contributes the same ~80/10/10 proportion, so neither split is skewed toward the larger graph.
+- Assignment is per **node**, not per alignment pair. A dataset that ships its own split
+  (`ncit_doid`'s `refs_equiv/{train,test}.tsv`) does **not** override this — that source split stays
+  recorded in `alignments.parquet.split` and is consumed separately (see below), keeping the node
+  partition uniform across datasets.
+- Seeded and deterministic: the same ingest config and seed produce the same partition, and the
+  partition is hashed into the manifest so a downstream run can detect it changed.
+
+`val` and `test` nodes are both **held out** from contrastive example construction (§5.3); only
+`train` nodes form the sampling pool. `splits.parquet` never removes a node from `nodes.parquet` —
+held-out nodes still get embeddings and still appear in `universe.parquet`, because `gcl_train`
+needs their features to encode the graph and `evaluate` needs them to score.
+
+**Interaction with dataset-provided alignment splits.** These are two independent exclusions and
+both are enforced. A node is held out from sampling if it is in our `val`/`test` partition **or** it
+appears in an `alignments.parquet` row whose `split` is `test`. For `attack_cwe` (no alignments) the
+second clause is vacuous. For `ncit_doid` it keeps the benchmark's own test pairs genuinely unseen,
+so reported Hits@k/MRR stay comparable to published OAEI Bio-ML numbers even though our node
+partition was drawn independently of theirs.
 
 ### 5.2 `embed` — text and structural embedding generation
 
@@ -465,25 +499,49 @@ Nothing here references the dataset beyond `dataset_id` in the path.
 
 | | |
 |---|---|
-| **Inputs** | one text embedding store + one graph embedding store (by `ArtifactRef`), `nodes.parquet` for `graph_role`, `alignments.parquet` if present |
-| **Config** | sampler and parameters, universe policy, seed, split settings |
+| **Inputs** | one text embedding store + one graph embedding store (by `ArtifactRef`), `nodes.parquet` for `graph_role`, `splits.parquet` for the node partition, `alignments.parquet` if present |
+| **Config** | sampler and parameters, universe policy, seed |
 | **Outputs** → `artifacts/training_data/{dataset_id}/{run_id}/` | `universe.parquet`, `examples.parquet`, `stats.json`, `manifest.json` |
 
 Steps:
 
 1. `build_universe` — nodes with `status == ok` in **every** required store (policy `intersection`,
-   default) → `universe.parquet` (`row`, `node_id`, `graph_role`). This replaces the legacy
-   "graph_1 rows come first" assumption with an explicit column.
+   default) → `universe.parquet` (`row`, `node_id`, `graph_role`, `split`, `held_out`). This replaces
+   the legacy "graph_1 rows come first" assumption with explicit columns. `split` is carried over
+   verbatim from the ingest run's `splits.parquet` (§5.1.1) — this pipeline never draws a partition
+   of its own. `held_out` is the derived sampling-eligibility flag:
+
+   ```
+   held_out = (split in {val, test}) or (node appears in an alignments.parquet row with split == test)
+   ```
+
+   Both clauses are enforced; the second is vacuous for datasets without alignments. `held_out` is
+   computed here, **before** similarity or sampling ever run, because that is the only point in the
+   pipeline where eligibility can be decided without having already leaked the node into a
+   similarity matrix.
 2. `similarity` — cosine matrices: **cross-graph** in text space, **within-graph** in structural
-   space. Defined by `graph_role`, not by dataset.
-3. `sample` — a registered sampler emitting rows of the examples schema (§6.5):
+   space, computed **only over `held_out == False` rows**. Defined by `graph_role`, not by dataset.
+   A held-out node's embedding is still available (it stays in `universe.parquet` for `gcl_train`
+   and `evaluate`), it is simply never a candidate row/column when `rank_topk`/`percentile` build
+   their similarity-ranked neighbor lists — otherwise a node reserved for evaluating the trained
+   model could be selected as an unsupervised anchor/positive/negative during training, contaminating
+   the very embeddings that evaluation later scores.
+3. `sample` — a registered sampler emitting rows of the examples schema (§6.6), drawing only from the
+   `held_out == False` pool for `rank_topk`/`percentile`:
    - `rank_topk` — top-k/bottom-k by argsort, pairs zipped by rank (legacy sample 10)
    - `percentile` — percentile thresholds with randomized pairing (legacy sample 11), seeded
-   - `supervised` — positives taken from `alignments.parquet` where the dataset provides them
-4. `split` — assign `split ∈ {train, val, test}` grouped by anchor node. When
-   `alignments.parquet` carries its own splits (as `ncit_doid` does), those are respected and no
-   alignment-test node leaks into training examples.
-5. `validate_and_manifest`.
+   - `supervised` — positives taken from `alignments.parquet` where the dataset provides them,
+     restricted to pairs whose endpoints are both in the `train` node split and not in a
+     `test`-split alignment row
+4. `assign_example_split` — every example inherits the `split` of its **anchor** node, so the node
+   partition and the example partition can never disagree. In practice this makes all unsupervised
+   examples `train` (steps 1–3 already excluded `val`/`test` anchors from the sampling pool);
+   the step exists so the invariant is asserted rather than assumed, and so a future sampler that
+   deliberately emits held-out-anchor examples (e.g. for a val-loss curve) labels them correctly
+   without changing the schema.
+5. `validate_and_manifest` — in addition to the usual schema/FK checks, assert that no `held_out`
+   node id appears in any of `examples.{anchor_id, text_pos_id, text_neg_id, graph_pos_id,
+   graph_neg_id}` — the leakage check that makes step 1's exclusion enforced, not just intended.
 
 ### 5.4 `gcl_train` — graph contrastive learning
 
@@ -513,17 +571,18 @@ thing that writes evaluation results.
 
 | | |
 |---|---|
-| **Inputs** | `node_embeddings/` (AlignedMatrix) from a `gcl_train` run; `nodes.parquet` for `graph_role` and `alignments.parquet`, both resolved **via that run's manifest chain** |
+| **Inputs** | `node_embeddings/` (AlignedMatrix) from a `gcl_train` run; `nodes.parquet` for `graph_role`, `splits.parquet`, and `alignments.parquet`, all resolved **via that run's manifest chain** |
 | **Config** | `gcl_run` ref, `ks`, candidate-pool usage, diagnostic toggles |
 | **Outputs** → `artifacts/evaluations/{dataset_id}/{run_id}/` | `metrics.json`, `rankings.parquet` (optional per-pair detail), `manifest.json` |
 
 Steps:
 
 1. `load` — resolve the `gcl_train` run, read its manifest, follow `inputs[]` back to the `ingest`
-   run that produced `nodes.parquet` / `alignments.parquet`, and load the exported embeddings.
-   Nothing is passed in by hand, so an evaluation cannot be run against mismatched sources.
+   run that produced `nodes.parquet` / `splits.parquet` / `alignments.parquet`, and load the exported
+   embeddings. Nothing is passed in by hand, so an evaluation cannot be run against mismatched sources.
 2. `rank` — with alignments present, score each test pair (§8.4); skipped when there are none.
-3. `diagnose` — unsupervised checks (§8.4), always run.
+3. `diagnose` — unsupervised checks (§8.4), always run; reported over all nodes and over the
+   `test` split separately.
 4. `validate_and_manifest`.
 
 Because it reads only the exported `AlignedMatrix`, this pipeline evaluates any saved model — an
@@ -582,12 +641,28 @@ pyarrow types; `pk` = primary key, enforced on write.
 | `node_2_id` | string | FK → nodes, `graph_role == graph_2` |
 | `relation` | string | `equivalence` (initial scope) |
 | `score` | float32 | 1.0 for gold |
-| `split` | string | `train` \| `test` \| `unassigned` — as provided by the source |
+| `split` | string | `train` \| `test` \| `unassigned` — **the source's own** pair split, not ours |
 | `candidates` | list\<string\> \| null | ranking candidate pool (`test.cands.tsv`) |
 
 Empty for datasets without ground truth; consumers must handle zero rows.
 
-### 6.5 `examples.parquet`
+This `split` is a property of an **alignment pair** as the benchmark shipped it, and is distinct
+from the per-**node** partition in `splits.parquet` (§6.5). Both are honored: §5.3 step 1 holds a
+node out of sampling if either marks it held out.
+
+### 6.5 `splits.parquet`
+
+| Field | Type | Notes |
+|---|---|---|
+| `node_id` pk | string | FK → nodes; exactly one row per node in `nodes.parquet` |
+| `graph_role` | string | denormalized; the partition is drawn per graph (§5.1.1) |
+| `split` | string | `train` \| `val` \| `test` |
+
+Written by `ingest.split_nodes` for **every** dataset, including those with no alignments. Produced
+by a seeded proportional draw per `graph_role`, so each graph contributes the same train/val/test
+proportions.
+
+### 6.6 `examples.parquet`
 
 | Field | Type | Notes |
 |---|---|---|
@@ -596,22 +671,25 @@ Empty for datasets without ground truth; consumers must handle zero rows.
 | `text_pos_id`, `text_neg_id` | string | **cross-graph** pair (text view) |
 | `graph_pos_id`, `graph_neg_id` | string | **within-graph** pair (structural view) |
 | `sampler` | string | `rank_topk` \| `percentile` \| `supervised` |
-| `split` | string | `train` \| `val` \| `test` |
+| `split` | string | `train` \| `val` \| `test` — inherited from the anchor node's `splits.parquet` row |
 
-### 6.6 Embedding store tables
+### 6.7 Embedding store tables
 
 `status.parquet`: `node_id` pk, `status`, `attempts:int16`, `error:string|null`,
 `input_sha256:string|null`, `n_chunks:int16|null`, `updated_at:timestamp`.
 `index.parquet`: `row:int32` pk, `node_id:string` unique.
 `shards/part-*.parquet`: `node_id`, `vector: list<float32>`, `input_sha256`, `n_chunks`.
-`universe.parquet`: `row:int32` pk, `node_id:string` unique, `graph_role:string`.
+`universe.parquet`: `row:int32` pk, `node_id:string` unique, `graph_role:string`,
+`split:string` (carried from `splits.parquet`), `held_out:bool` (derived — `True` when
+`split in {val, test}` **or** the node appears in a `test`-split `alignments.parquet` row;
+see §5.3 step 1).
 
-### 6.7 `metrics.jsonl`
+### 6.8 `metrics.jsonl`
 
 One object per epoch: `{"epoch": 12, "loss": 0.41, "loss_text": 0.39, "loss_graph": 0.43, "lr": 1e-3, "elapsed_s": 0.8}`; in-loop monitoring (`gcl_train.monitor`) appends `{"epoch": …, "eval": {…}}`.
 Authoritative metrics live in the `evaluate` run's `metrics.json`, not here.
 
-### 6.8 Model manifests
+### 6.9 Model manifests
 
 `models/llm/…` adds `base_model` (+revision), `objective` (`mlm`/`clm`), `text_variant`,
 `texts_run_id`, epochs, effective batch size, final loss.
@@ -733,7 +811,22 @@ dataset:
 Note both dataset files have the **same shape**: identity, adapter key, per-graph adapter config,
 text-variant composition, alignment sources. The generic pipelines read only the shared keys.
 
-### 7.5 `configs/pipelines/embed.yaml`
+### 7.5 `configs/pipelines/ingest.yaml`
+
+```yaml
+ingest:
+  text_variant_selection: null     # null = ingest every variant declared in dataset.text_variants
+  split:
+    fractions: [0.8, 0.1, 0.1]     # train / val / test, per graph_role (§5.1.1)
+    seed: null                     # null = use the run's global seed
+```
+
+`split.fractions` must sum to 1.0 and is applied to **each graph independently**, so both graphs
+contribute the same proportions. The same values apply to every dataset — a dataset's own
+alignment-level split (`ncit_doid`) does not override this node partition; it is enforced
+separately in §5.3 step 1.
+
+### 7.6 `configs/pipelines/embed.yaml`
 
 ```yaml
 embed:
@@ -778,12 +871,12 @@ embed:
     q: 1.0
 ```
 
-### 7.6 `configs/pipelines/training_data.yaml`
+### 7.7 `configs/pipelines/training_data.yaml`
 
 ```yaml
 training_data:
   inputs:
-    ingest_run: latest
+    ingest_run: latest              # supplies nodes, splits, alignments
     text_embeddings:  {embedder_id: hf-pt_SecRoBERTa, run: latest}
     graph_embeddings: {embedder_id: deepwalk-d128-w30-n200, run: latest}
   universe_policy: intersection     # intersection | text_only
@@ -792,13 +885,12 @@ training_data:
     k: 30
     top_pct: 0.04                   # percentile sampler
     bottom_pct: 0.04
-  split:
-    mode: from_alignments           # from_alignments | random | none
-    val_fraction: 0.1
-    group_by: anchor_id
 ```
 
-### 7.7 `configs/pipelines/gcl_train.yaml`
+No split configuration lives here: the node partition is drawn once by `ingest` (§7.5) and read
+from `splits.parquet`, and each example inherits its anchor's split (§5.3 step 4).
+
+### 7.8 `configs/pipelines/gcl_train.yaml`
 
 ```yaml
 gcl_train:
@@ -826,7 +918,7 @@ gcl_train:
     ks: [1, 5, 10]
 ```
 
-### 7.8 `configs/pipelines/evaluate.yaml`
+### 7.9 `configs/pipelines/evaluate.yaml`
 
 ```yaml
 evaluate:
@@ -844,7 +936,7 @@ evaluate:
   write_rankings: false             # per-pair detail to rankings.parquet
 ```
 
-### 7.9 `configs/experiments/attack_cwe_secroberta_gcn.yaml`
+### 7.10 `configs/experiments/attack_cwe_secroberta_gcn.yaml`
 
 ```yaml
 # Each top-level key overlays the matching pipeline config.
@@ -898,7 +990,8 @@ pipeline cannot read an artifact it failed to declare.
 ### 8.4 Evaluation
 
 Pipeline 5 (§5.5), entirely generic — it reads an exported `AlignedMatrix`, `nodes.parquet` for
-`graph_role`, and `alignments.parquet`, and knows nothing about any dataset:
+`graph_role`, `splits.parquet` for the node partition, and `alignments.parquet`, and knows nothing
+about any dataset:
 
 - **With alignments** (`ncit_doid`): for each test pair, rank `graph_2` candidates by cosine
   similarity to the `graph_1` node — over the full `graph_2` node set, and over the supplied
@@ -908,9 +1001,11 @@ Pipeline 5 (§5.5), entirely generic — it reads an exported `AlignedMatrix`, `
   `graph_role`, cross-graph similarity distribution, nearest-cross-graph-neighbor samples dumped for
   manual inspection.
 
-Both write `artifacts/evaluations/{dataset_id}/{run_id}/metrics.json`; the ranking block is absent
-when `alignments.parquet` is empty. `gcl_train.monitor` may run the same ranking code in-loop for
-progress visibility, but only this pipeline writes the reported numbers.
+Diagnostics are reported **both** over all nodes and restricted to the `test` split, so a dataset
+with no alignment ground truth still gets a number computed on nodes the contrastive objective
+never saw (§5.1.1). Both write `artifacts/evaluations/{dataset_id}/{run_id}/metrics.json`; the
+ranking block is absent when `alignments.parquet` is empty. `gcl_train.monitor` may run the same
+ranking code in-loop for progress visibility, but only this pipeline writes the reported numbers.
 
 ### 8.5 Logging, reproducibility, error handling
 
@@ -949,6 +1044,7 @@ data/raw/{dataset_id}/…            (attack.json + cwec.xml  |  ncit.owl + doid
         │    edges.parquet       (intra-graph only)         │
         │    texts.parquet       (node_id, variant, text)   │
         │    alignments.parquet  (may be empty)             │
+        │    splits.parquet      (train/val/test per node)  │
         └───────┬───────────────────────────┬──────────────┘
           texts │                           │ edges + nodes
                 ▼                           ▼
@@ -959,10 +1055,10 @@ data/raw/{dataset_id}/…            (attack.json + cwec.xml  |  ncit.owl + doid
                 │                           │
                 └─────────────┬─────────────┘
                               ▼
-                   cga run training_data
+                   cga run training_data      ← also reads splits.parquet
               artifacts/training_data/{ds}/{run}/
-                universe.parquet   ← NodeUniverse (id ↔ row, graph_role)
-                examples.parquet   ← anchor/pos/neg by node_id
+                universe.parquet   ← NodeUniverse (id ↔ row, graph_role, split, held_out)
+                examples.parquet   ← anchor/pos/neg by node_id, train-split anchors only
                 manifest.json      ← records both embedding run_ids
                               │
                               ▼

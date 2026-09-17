@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict
 GraphRole = Literal["graph_1", "graph_2"]
 EmbeddingStatus = Literal["ok", "missing_text", "empty_text", "failed", "skipped"]
 AlignmentSplit = Literal["train", "test", "unassigned"]
+NodeSplit = Literal["train", "val", "test"]
 ExampleSplit = Literal["train", "val", "test"]
 Sampler = Literal["rank_topk", "percentile", "supervised"]
 
@@ -139,7 +140,34 @@ class AlignmentRecord(BaseModel):
     candidates: list[str] | None = None
 
 
-# --- 6.5 examples.parquet ----------------------------------------------------
+# --- 6.5 splits.parquet -------------------------------------------------------
+
+SPLITS_SCHEMA = pa.schema(
+    [
+        pa.field("node_id", pa.string(), nullable=False),
+        pa.field("graph_role", pa.string(), nullable=False),
+        pa.field("split", pa.string(), nullable=False),
+    ]
+)
+
+
+class SplitRecord(BaseModel):
+    """One row of ``splits.parquet``: this node's train/val/test partition.
+
+    Written by ``ingest.split_nodes`` for every dataset, including those with
+    no alignment ground truth — a proportional, seeded per-``graph_role``
+    partition (target_architecture.md §5.1.1), independent of whatever split a
+    dataset's own alignment source may provide.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    node_id: str
+    graph_role: GraphRole
+    split: NodeSplit
+
+
+# --- 6.6 examples.parquet ----------------------------------------------------
 
 EXAMPLES_SCHEMA = pa.schema(
     [
@@ -170,7 +198,7 @@ class ExampleRecord(BaseModel):
     split: ExampleSplit
 
 
-# --- 6.6 Embedding store tables ----------------------------------------------
+# --- 6.7 Embedding store tables ----------------------------------------------
 
 STATUS_SCHEMA = pa.schema(
     [
@@ -242,15 +270,27 @@ UNIVERSE_SCHEMA = pa.schema(
         pa.field("row", pa.int32(), nullable=False),
         pa.field("node_id", pa.string(), nullable=False),
         pa.field("graph_role", pa.string(), nullable=False),
+        pa.field("split", pa.string(), nullable=False),
+        pa.field("held_out", pa.bool_(), nullable=False),
     ]
 )
 
 
 class UniverseRecord(BaseModel):
-    """One row of ``universe.parquet``."""
+    """One row of ``universe.parquet``.
+
+    ``split`` is carried verbatim from the ingest run's ``splits.parquet``
+    (target_architecture.md §5.1.1). ``held_out`` is derived from it: True when
+    ``split in {val, test}`` **or** the node appears in a ``test``-split
+    ``alignments.parquet`` row (§5.3 step 1). Held-out nodes are excluded from
+    unsupervised similarity/sampling in ``training_data`` so they cannot leak
+    into contrastive examples the model trains on.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     row: int
     node_id: str
     graph_role: GraphRole
+    split: NodeSplit = "train"
+    held_out: bool = False

@@ -1,9 +1,10 @@
-"""Read/write the four canonical ingest tables with pk-uniqueness and FK checks.
+"""Read/write the canonical ingest tables with pk-uniqueness and FK checks.
 
-This is the only place ``nodes``/``edges``/``texts``/``alignments`` are written,
-so referential integrity (edges within one graph_role, alignments crossing
-graph_role) is enforced exactly once, at the boundary between an adapter's raw
-output and everything downstream that trusts these tables blindly.
+This is the only place ``nodes``/``edges``/``texts``/``alignments``/``splits``
+are written, so referential integrity (edges within one graph_role, alignments
+crossing graph_role, splits covering every node exactly once) is enforced
+exactly once, at the boundary between an adapter's raw output and everything
+downstream that trusts these tables blindly.
 """
 
 from __future__ import annotations
@@ -14,7 +15,7 @@ import pyarrow as pa
 
 from cga.core.errors import ArtifactValidationError
 from cga.core.io import read_parquet, write_parquet
-from cga.data.schemas import ALIGNMENTS_SCHEMA, EDGES_SCHEMA, NODES_SCHEMA, TEXTS_SCHEMA
+from cga.data.schemas import ALIGNMENTS_SCHEMA, EDGES_SCHEMA, NODES_SCHEMA, SPLITS_SCHEMA, TEXTS_SCHEMA
 
 
 def _check_pk_unique(table: pa.Table, pk_column: str, table_name: str) -> None:
@@ -150,3 +151,35 @@ def write_alignments(table: pa.Table, path: str | Path, *, nodes: pa.Table) -> N
 def read_alignments(path: str | Path) -> pa.Table:
     """Read ``alignments.parquet`` with schema validation."""
     return read_parquet(path, schema=ALIGNMENTS_SCHEMA)
+
+
+def write_splits(table: pa.Table, path: str | Path, *, nodes: pa.Table) -> None:
+    """Write ``splits.parquet``, enforcing schema, FK, and one-row-per-node completeness.
+
+    Raises:
+        ArtifactValidationError: If any ``node_id`` is not present in ``nodes``,
+            a node is missing a split row, or a ``node_id`` appears more than once.
+    """
+    node_ids = nodes.column("node_id").to_pylist()
+    node_id_set = set(node_ids)
+
+    split_node_ids = table.column("node_id").to_pylist()
+    for node_id in split_node_ids:
+        if node_id not in node_id_set:
+            raise ArtifactValidationError(f"splits.parquet node_id '{node_id}' not found in nodes")
+
+    write_parquet(table, path, schema=SPLITS_SCHEMA)
+    written = read_parquet(path, schema=SPLITS_SCHEMA)
+    _check_pk_unique(written, "node_id", "splits")
+
+    written_ids = set(written.column("node_id").to_pylist())
+    missing = node_id_set - written_ids
+    if missing:
+        raise ArtifactValidationError(
+            f"splits.parquet is missing {len(missing)} node(s), e.g. {sorted(missing)[:5]}"
+        )
+
+
+def read_splits(path: str | Path) -> pa.Table:
+    """Read ``splits.parquet`` with schema validation."""
+    return read_parquet(path, schema=SPLITS_SCHEMA)

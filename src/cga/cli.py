@@ -44,6 +44,9 @@ def _run_root(pipeline_name: str, config: dict[str, Any]) -> Path:
     one further level under the run's ``embedder_id`` (target_architecture.md
     §5.2), which depends on the resolved ``embed.embedder`` config block, so it
     cannot be expressed by the generic ``_PIPELINE_OUTPUT_ROOT`` lookup alone.
+    ``training_data`` writes to ``artifacts/training_data/{dataset_id}`` (§5.3),
+    one level under ``paths.artifacts`` rather than directly in it.
+    ``gcl_train`` writes to ``models/gcl/{dataset_id}`` (§5.4).
     """
     dataset_id = config["dataset"]["id"]
     if pipeline_name == "embed":
@@ -51,6 +54,12 @@ def _run_root(pipeline_name: str, config: dict[str, Any]) -> Path:
 
         embedder_id = build_embedder_id(config["embed"]["embedder"])
         return Path(config["paths"]["artifacts"]) / "embeddings" / dataset_id / embedder_id
+
+    if pipeline_name == "training_data":
+        return Path(config["paths"]["artifacts"]) / "training_data" / dataset_id
+
+    if pipeline_name == "gcl_train":
+        return Path(config["paths"]["models"]) / "gcl" / dataset_id
 
     output_subdir = _PIPELINE_OUTPUT_ROOT.get(pipeline_name, pipeline_name)
     return Path(config["paths"][output_subdir]) / dataset_id

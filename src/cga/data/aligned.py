@@ -127,16 +127,39 @@ class AlignedMatrix:
 
 @dataclass
 class NodeUniverse:
-    """An ordered list of node ids a training run operates on, with each id's graph_role."""
+    """An ordered list of node ids a training run operates on, with each id's graph_role.
+
+    Attributes:
+        node_ids: Ordered, unique node ids.
+        graph_roles: ``graph_roles[i]`` is the ``graph_role`` for ``node_ids[i]``.
+        split: ``split[i]`` is the ``train``/``val``/``test`` partition for
+            ``node_ids[i]``, carried from ``splits.parquet`` (target_architecture.md
+            §5.1.1). Defaults to all-``"train"`` for callers that don't track this.
+        held_out: ``held_out[i]`` is True when ``node_ids[i]`` must be excluded
+            from unsupervised similarity/sampling (target_architecture.md §5.3
+            step 1) — derived from ``split`` and any held-out alignment split.
+            Defaults to all-False for callers that don't track this (e.g.
+            ``gcl_train``/``evaluate``, which use every node regardless).
+    """
 
     node_ids: list[str]
     graph_roles: list[str]
+    split: list[str] | None = None
+    held_out: list[bool] | None = None
 
     def __post_init__(self) -> None:
         if len(self.node_ids) != len(self.graph_roles):
             raise ArtifactValidationError("NodeUniverse node_ids and graph_roles must be the same length")
         if len(self.node_ids) != len(set(self.node_ids)):
             raise ArtifactValidationError("NodeUniverse node_ids must be unique")
+        if self.split is None:
+            self.split = ["train"] * len(self.node_ids)
+        elif len(self.split) != len(self.node_ids):
+            raise ArtifactValidationError("NodeUniverse split must be the same length as node_ids")
+        if self.held_out is None:
+            self.held_out = [False] * len(self.node_ids)
+        elif len(self.held_out) != len(self.node_ids):
+            raise ArtifactValidationError("NodeUniverse held_out must be the same length as node_ids")
 
     @classmethod
     def from_parquet(cls, path: str | Path) -> "NodeUniverse":
@@ -145,10 +168,14 @@ class NodeUniverse:
         rows = table.column("row").to_pylist()
         node_ids = table.column("node_id").to_pylist()
         graph_roles = table.column("graph_role").to_pylist()
+        split = table.column("split").to_pylist()
+        held_out = table.column("held_out").to_pylist()
         order = sorted(range(len(rows)), key=lambda i: rows[i])
         return cls(
             node_ids=[node_ids[i] for i in order],
             graph_roles=[graph_roles[i] for i in order],
+            split=[split[i] for i in order],
+            held_out=[held_out[i] for i in order],
         )
 
     def save(self, path: str | Path) -> None:
@@ -158,6 +185,8 @@ class NodeUniverse:
                 "row": pa.array(range(len(self.node_ids)), type=pa.int32()),
                 "node_id": pa.array(self.node_ids, type=pa.string()),
                 "graph_role": pa.array(self.graph_roles, type=pa.string()),
+                "split": pa.array(self.split, type=pa.string()),
+                "held_out": pa.array(self.held_out, type=pa.bool_()),
             },
             schema=UNIVERSE_SCHEMA,
         )

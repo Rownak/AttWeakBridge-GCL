@@ -12,7 +12,7 @@ from cga.core.errors import ArtifactValidationError
 from cga.core.io import read_json
 from cga.core.registry import pipelines
 from cga.core.run import RunContext
-from cga.data.graph_store import read_edges, read_nodes, read_texts
+from cga.data.graph_store import read_edges, read_nodes, read_splits, read_texts
 
 FIXTURES = Path(__file__).parents[2] / "adapters" / "fixtures"
 
@@ -68,12 +68,19 @@ def _run_ingest(config: dict, tmp_path: Path) -> RunContext:
     return ctx
 
 
-def test_ingest_writes_four_tables_and_stats(tmp_path):
+def test_ingest_writes_five_tables_and_stats(tmp_path):
     config = _build_config(tmp_path)
     ctx = _run_ingest(config, tmp_path)
 
     assert ctx.manifest.status == "success"
-    for filename in ("nodes.parquet", "edges.parquet", "texts.parquet", "alignments.parquet", "stats.json"):
+    for filename in (
+        "nodes.parquet",
+        "edges.parquet",
+        "texts.parquet",
+        "alignments.parquet",
+        "splits.parquet",
+        "stats.json",
+    ):
         assert (ctx.run_dir / filename).is_file()
 
     nodes = read_nodes(ctx.run_dir / "nodes.parquet")
@@ -82,6 +89,52 @@ def test_ingest_writes_four_tables_and_stats(tmp_path):
     stats = read_json(ctx.run_dir / "stats.json")
     assert stats["n_nodes"] == 6
     assert stats["n_alignments"] == 0
+
+
+def test_ingest_splits_cover_every_node_exactly_once(tmp_path):
+    config = _build_config(tmp_path)
+    ctx = _run_ingest(config, tmp_path)
+
+    nodes = read_nodes(ctx.run_dir / "nodes.parquet")
+    splits = read_splits(ctx.run_dir / "splits.parquet")
+
+    node_ids = set(nodes.column("node_id").to_pylist())
+    split_node_ids = splits.column("node_id").to_pylist()
+    assert set(split_node_ids) == node_ids
+    assert len(split_node_ids) == len(set(split_node_ids))
+    assert all(s in ("train", "val", "test") for s in splits.column("split").to_pylist())
+
+
+def test_ingest_splits_are_reproducible_under_fixed_seed(tmp_path):
+    # split.seed pins the partition explicitly; run into two distinct run_dirs
+    # (different --run-name) so this doesn't depend on config_hash/timestamp
+    # producing distinct run_ids within the same wall-clock second.
+    config1 = _build_config(tmp_path)
+    config1["ingest"]["split"] = {"fractions": [0.8, 0.1, 0.1], "seed": 123}
+    ctx1 = _run_ingest(config1, tmp_path)
+
+    config2 = _build_config(tmp_path)
+    config2["ingest"]["split"] = {"fractions": [0.8, 0.1, 0.1], "seed": 123}
+    config2["run"]["name"] = "second-run"
+    ctx2 = _run_ingest(config2, tmp_path)
+
+    assert ctx1.run_dir != ctx2.run_dir
+    splits1 = read_splits(ctx1.run_dir / "splits.parquet")
+    splits2 = read_splits(ctx2.run_dir / "splits.parquet")
+    map1 = dict(zip(splits1.column("node_id").to_pylist(), splits1.column("split").to_pylist()))
+    map2 = dict(zip(splits2.column("node_id").to_pylist(), splits2.column("split").to_pylist()))
+    assert map1 == map2
+
+
+def test_ingest_split_fractions_configurable(tmp_path):
+    config = _build_config(tmp_path)
+    config["ingest"]["split"] = {"fractions": [0.5, 0.25, 0.25], "seed": 7}
+    ctx = _run_ingest(config, tmp_path)
+
+    stats = read_json(ctx.run_dir / "stats.json")
+    assert "n_nodes_by_split_by_graph_role" in stats
+    for role_counts in stats["n_nodes_by_split_by_graph_role"].values():
+        assert set(role_counts.keys()) <= {"train", "val", "test"}
 
 
 def test_ingest_writes_latest_file(tmp_path):
