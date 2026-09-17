@@ -76,7 +76,10 @@ Non-goals: distributed execution, experiment UI, remote storage, model serving.
 │   │   ├── embed.yaml
 │   │   ├── training_data.yaml
 │   │   ├── gcl_train.yaml
-│   │   └── evaluate.yaml
+│   │   ├── evaluate.yaml
+│   │   └── plot.yaml
+│   ├── plots/                      #   named plot specs over metrics.parquet
+│   │   └── neighborhood_compare.yaml
 │   └── experiments/                #   named overlays spanning pipelines
 │       └── attack_cwe_secroberta_gcn.yaml
 │
@@ -128,20 +131,23 @@ Non-goals: distributed execution, experiment UI, remote storage, model serving.
 │   │   │   ├── models.py           #     DualEncoder, GCN/GAT towers
 │   │   │   ├── losses.py           #     triplet, jsd, infonce
 │   │   │   └── trainer.py
-│   │   └── evaluate/
-│   │       ├── pipeline.py         #   Pipeline 5 — loads methods, runs configured evaluators
-│   │       ├── methods.py          #     MethodSpec + load_method (embedding store | gcl run)
-│   │       ├── rows.py             #     MetricRow + long-form writer + JSON digest
-│   │       ├── metrics.py          #     set-based precision/recall/hit/MRR primitives
-│   │       └── evaluators/         #     one file per registered evaluation kind
-│   │           ├── neighborhood.py #       + relevance.py provider registry (hop_radius, cosine_top_k)
-│   │           ├── cluster_quality.py
-│   │           └── alignment_ranking.py
+│   │   ├── evaluate/
+│   │   │   ├── pipeline.py         #   Pipeline 5 — loads methods, runs configured evaluators
+│   │   │   ├── methods.py          #     MethodSpec + load_method (embedding store | gcl run)
+│   │   │   ├── rows.py             #     MetricRow + long-form writer + JSON digest
+│   │   │   ├── metrics.py          #     set-based precision/recall/hit/MRR primitives
+│   │   │   └── evaluators/         #     one file per registered evaluation kind
+│   │   │       ├── neighborhood.py #       + relevance.py provider registry (hop_radius, cosine_top_k)
+│   │   │       ├── cluster_quality.py
+│   │   │       └── alignment_ranking.py
+│   │   └── plot/
+│   │       ├── pipeline.py         #   Pipeline 6 — metrics.parquet → figures
+│   │       └── renderers.py        #     one registered renderer per chart kind (line, bar, heatmap)
 │   └── py.typed
 │
 ├── scripts/
 │   ├── check_env.py
-│   └── run_all.sh                  # chains the five pipelines for one experiment
+│   └── run_all.sh                  # chains the pipelines for one experiment
 │
 ├── data/
 │   ├── raw/                        # immutable source data, one dir per DATASET PAIR
@@ -157,7 +163,8 @@ Non-goals: distributed execution, experiment UI, remote storage, model serving.
 ├── artifacts/
 │   ├── embeddings/{dataset_id}/{embedder_id}/{run_id}/
 │   ├── training_data/{dataset_id}/{run_id}/
-│   └── evaluations/{dataset_id}/{run_id}/
+│   ├── evaluations/{dataset_id}/{run_id}/
+│   └── plots/{dataset_id}/{run_id}/
 │
 ├── models/
 │   ├── llm/{base_model_slug}/{run_id}/
@@ -410,15 +417,16 @@ dataset = one adapter package + one `configs/datasets/<name>.yaml`.** No file ou
 
 ## 5. Pipelines
 
-Five pipelines, each registered by name, each a sequence of steps that declare the artifacts they
+Six pipelines, each registered by name, each a sequence of steps that declare the artifacts they
 read and write so the base class can validate inputs before work starts and write the manifest at
 the end. **Only Pipeline 1 is dataset-aware**, and only through the adapter registry.
 
-Pipelines 1–4 form the training chain; Pipeline 5 (`evaluate`) is separate because it consumes a
+Pipelines 1–4 form the training chain. Pipeline 5 (`evaluate`) is separate because it consumes a
 finished model's exported embeddings rather than the trainer's internals. Keeping it out of
 `gcl_train` means changing an evaluation's `ks` does not change `gcl_train`'s `config_hash` and does
 not invalidate a completed training run — and it is what lets MLflow evaluate a registered model
-version, and DVC re-run evaluation as its own stage, without retraining.
+version, and DVC re-run evaluation as its own stage, without retraining. Pipeline 6 (`plot`) is
+separate for the same reason one step further down: re-plotting must not re-score.
 
 ### 5.1 `ingest` — dataset adapter → canonical graph artifacts
 
@@ -644,6 +652,38 @@ available for a dataset with no ground truth (`attack_cwe` today).
   across methods, which would otherwise be pool-size sensitive. Comparisons stay within one
   `graph_role` unless a provider declares otherwise (alignment relevance is cross-role).
 - `query_set_sha256` per (evaluation, view, role) records that the methods really shared a query set.
+
+### 5.6 `plot` — figures from `metrics.parquet`
+
+Renders an `evaluate` run's `metrics.parquet` into figures. A separate pipeline rather than a step
+inside `evaluate` because plotting is a downstream, re-runnable transform of an artifact that already
+exists: re-plotting must not re-score, and one evaluation run is plotted several ways (draft, paper,
+slides) without touching the numbers.
+
+| | |
+|---|---|
+| **Inputs** | `metrics.parquet` from an `evaluate` run |
+| **Config** | `inputs.evaluate_run`, `figures[]` (each `{figure_id, kind, select, x/hue/facet, …}`) |
+| **Outputs** → `artifacts/plots/{dataset_id}/{run_id}/` | `figures/{figure_id}.png`, `manifest.json` |
+
+Steps: `load` (resolve the `evaluate` run, read `metrics.parquet`, validate every figure's `select`
+matches at least one row) → `render` (registry lookup per `figures[]` entry) → `validate_and_manifest`.
+
+A **figure spec** says which long-form slice to draw and which column plays which plot role — it
+never names an evaluation kind:
+
+- `select` — an equality filter over metric columns (`evaluation_id`, `metric_name`, `view_id`, …).
+- `x` / `hue` / `facet` — column names, defaulting to `param_value` / `method_label` /
+  `[view_id, graph_role]`.
+- `kind` — a key in the **renderer registry** (`line`, `bar`, `heatmap`), each a pure function of a
+  filtered DataFrame plus its own opaque `params`.
+
+Because §6.10 is long-form, precision-vs-`k` and silhouette-vs-`n_clusters` are the *same* renderer
+against different `select` filters, so a new evaluation is usually plottable with zero new code. An
+empty selection is a `ConfigError` at `load`, not a blank PNG.
+
+`evaluate.visualize` stays where it is: t-SNE is a projection of an embedding matrix, not of
+`metrics.parquet`, and has no metric rows to select.
 
 ---
 
@@ -1064,6 +1104,34 @@ evaluate:
 `evaluations` is a list of **instances**, not a map keyed by kind, so the same kind may appear more
 than once with different params (a `top_k` sensitivity check) distinguished by `evaluation_id`.
 
+### 7.12 `configs/pipelines/plot.yaml` and `configs/plots/`
+
+```yaml
+plot:
+  inputs:
+    evaluate_run: latest
+  figures: []                       # [{figure_id, kind, select, x, hue, facet, params}]
+  format: {ext: png, dpi: 200}
+```
+
+A named figure set lives in `configs/plots/<name>.yaml` and is selected with `--config`, e.g.
+`cga run plot --dataset attack_cwe --config configs/plots/neighborhood_compare.yaml`:
+
+```yaml
+plot:
+  figures:
+    - {figure_id: precision_at_k, kind: line,
+       select: {evaluation_id: neigh, metric_name: normalized_precision_at_k},
+       x: param_value, hue: method_label, facet: [view_id, graph_role]}
+    - {figure_id: silhouette, kind: line,
+       select: {evaluation_id: clusters, metric_name: silhouette},
+       x: param_value, hue: method_label, facet: [graph_role]}
+```
+
+These are a separate directory from `configs/experiments/`, not a block inside
+`neighborhood_compare.yaml`: a plot spec references only `evaluation_id` / `metric_name`, so it is
+reusable across datasets and experiments, and one evaluation run can be plotted several ways.
+
 ---
 
 ## 8. Cross-cutting components
@@ -1115,7 +1183,8 @@ Evaluations that depend on the node partition report **both** over all nodes and
 `test` split, so a dataset with no alignment ground truth still gets a number computed on nodes the
 contrastive objective never saw (§5.1.1) — carried as a `graph_role`-style scope on the metric rows.
 `gcl_train.monitor` may run ranking code in-loop for progress visibility, but only this pipeline
-writes reported numbers.
+writes reported numbers. Figures are produced downstream by `plot` (§5.6) from `metrics.parquet`, so
+no figure can report a number `evaluate` did not write.
 
 ### 8.5 Logging, reproducibility, error handling
 
@@ -1136,8 +1205,9 @@ writes reported numbers.
   values; **each adapter against a handful of committed source snippets** (a few STIX objects, a few
   `owl:Class` blocks, a few TSV rows) asserting the canonical records they produce; each metric
   primitive against hand-computed values (including the `min(k,|R|)` denominator); each relevance
-  provider on a toy graph; each evaluator's rows on toy methods; and that all methods share one query
-  set when one method is missing nodes.
+  provider on a toy graph; each evaluator's rows on toy methods; that all methods share one query
+  set when one method is missing nodes; and each figure spec selecting the expected rows from a toy
+  `metrics.parquet`, with an empty selection raising.
 - `tests/integration/` — each pipeline end-to-end on `attack_cwe` with `epochs: 2`, asserting
   manifests, schemas, shapes, and referential integrity.
 
@@ -1188,6 +1258,11 @@ data/raw/{dataset_id}/…            (attack.json + cwec.xml  |  ncit.owl + doid
               metrics.json        ← digest derived from those rows
               plots/              ← optional t-SNE, never a metric
               manifest.json       ← records every method + reference run it scored
+                              │
+                              ▼
+                     cga run plot --config configs/plots/<name>.yaml
+            artifacts/plots/{ds}/{run}/
+              figures/{figure_id}.png   ← long-form slices rendered; re-runnable without re-scoring
 ```
 
 `evaluate` takes **several** methods — each baseline embedding store and each trained model — so the
@@ -1206,10 +1281,11 @@ Identity flows as `node_id` strings through every arrow. Positions are computed 
 2. Create `configs/datasets/<name>.yaml` following the shape in §7.3–7.4.
 3. Place source files under `data/raw/<name>/`.
 4. Add a unit test asserting the adapter's canonical output on committed source snippets.
-5. Run `cga run ingest --dataset <name>`, then the remaining four pipelines unchanged.
+5. Run `cga run ingest --dataset <name>`, then the remaining pipelines unchanged.
 
-No change to `cga/core/`, `cga/data/`, or any of the five pipelines. `evaluate` needs no change
-either — list the dataset's applicable evaluations in an overlay (§7.11).
+No change to `cga/core/`, `cga/data/`, or any pipeline. `evaluate` needs no change either — list the
+dataset's applicable evaluations in an overlay (§7.11) — and a `configs/plots/` spec written for one
+dataset applies to another unchanged, since it selects on `evaluation_id`, not on methods.
 
 ## 10a. Adding an evaluation, metric, or baseline
 
@@ -1220,6 +1296,8 @@ either — list the dataset's applicable evaluations in an overlay (§7.11).
 | New view for `neighborhood` | one relevance provider + `@relevance_providers.register(...)` |
 | New evaluation method | one file in `pipelines/evaluate/evaluators/`, `@evaluators.register(...)`, one pydantic params model, one test — zero change to `pipeline.py`, schemas, or the CLI |
 | New named evaluation | one file in `configs/experiments/` — zero code |
+| New figure over existing metrics | one entry in a `configs/plots/` spec — zero code |
+| New chart type | one renderer + `@renderers.register(...)` in `pipelines/plot/renderers.py` |
 
 ---
 

@@ -50,6 +50,7 @@ def _run_root(pipeline_name: str, config: dict[str, Any]) -> Path:
     partitioned by architecture so ``gcn``/``gat`` keep separate ``LATEST``
     pointers -- required for ``evaluate`` to compare both as ``latest``.
     ``evaluate`` writes to ``artifacts/evaluations/{dataset_id}`` (§5.5/§5.5a).
+    ``plot`` writes to ``artifacts/plots/{dataset_id}`` (§5.6).
     """
     dataset_id = config["dataset"]["id"]
     if pipeline_name == "embed":
@@ -69,6 +70,9 @@ def _run_root(pipeline_name: str, config: dict[str, Any]) -> Path:
 
     if pipeline_name == "evaluate":
         return Path(config["paths"]["artifacts"]) / "evaluations" / dataset_id
+
+    if pipeline_name == "plot":
+        return Path(config["paths"]["artifacts"]) / "plots" / dataset_id
 
     output_subdir = _PIPELINE_OUTPUT_ROOT.get(pipeline_name, pipeline_name)
     return Path(config["paths"][output_subdir]) / dataset_id

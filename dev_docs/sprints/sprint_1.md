@@ -321,3 +321,36 @@ file rather than a pipeline change. Phase 1.8's `metrics.py` and `visualize.py` 
       textual reference (`method:ref:textual`) as manifest inputs, tracing back through `gcl_train` →
       `training_data` → `embed`/`ingest` to raw file hashes; re-running produced a byte-identical
       `metrics.parquet` (excluding the `run_id` column).
+
+---
+
+## Phase 1.10 — `plot` pipeline
+
+A thin sixth pipeline turning an `evaluate` run's long-form `metrics.parquet` into figures (§5.6,
+§7.12). Separate from `evaluate` so re-plotting never re-scores, and so one evaluation run can be
+plotted several ways. A **figure spec** selects a slice of §6.10's rows and maps columns to plot
+roles (`x`/`hue`/`facet`); it names no evaluation kind, so precision-vs-`k` and silhouette-vs-
+`n_clusters` are the same renderer against different filters. `evaluate.visualize` (t-SNE) stays put:
+it projects an embedding matrix, not metric rows.
+
+- [x] `pipelines/plot/renderers.py` — `renderers` registry + a `FigureSpec` pydantic model
+      (`figure_id`, `kind`, `select`, `x`, `hue`, `facet`, `params`). Ship `line` first; add `bar` as
+      the second implementation that proves the registry is an extension point.
+- [x] `pipelines/plot/pipeline.py` — three steps: `load` (resolve `inputs.evaluate_run` via
+      `ctx.resolve`, read `metrics.parquet`, apply each figure's `select` and raise `ConfigError` on
+      an empty selection — a blank PNG is not an acceptable output) → `render` (registry lookup per
+      `figures[]` entry, one PNG each) → `validate_and_manifest`. Register as `"plot"`.
+- [x] `cli._run_root` — `plot` → `artifacts/plots/{dataset_id}`.
+- [x] `configs/pipelines/plot.yaml` per §7.12 (`inputs.evaluate_run: latest`, empty `figures`,
+      `format`); `configs/plots/neighborhood_compare.yaml` with the paper's two figures
+      (normalized precision@k faceted by view × role; silhouette vs `n_clusters` faceted by role).
+- [x] Tests: `select` picks the expected rows from a toy `metrics.parquet`; empty selection →
+      `ConfigError`; unknown `kind` → `ConfigError`; duplicate `figure_id` → `ConfigError`;
+      one PNG per configured figure with the expected filenames; faceting on a null column
+      (`view_id` for `cluster_quality`) does not crash; end-to-end against a fabricated `evaluate`
+      run, including the manifest recording it as an input. 14 new tests across
+      `test_renderers.py`, `test_pipeline.py`; full suite 339 passed.
+- [x] Verify: `cga run plot --dataset attack_cwe --config configs/plots/neighborhood_compare.yaml`
+      against the real Phase 1.9 evaluate run writes both figures under
+      `artifacts/plots/attack_cwe/{run_id}/figures/`; `cga inspect` traces back to the `evaluate` run
+      and its methods; re-running the same spec is a no-op on the numbers (plots only).
