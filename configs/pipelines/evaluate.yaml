@@ -1,0 +1,11 @@
+# target_architecture.md §7.9 (Phase 1.8 scope: neighborhood-preservation only;
+# the alignment `ranking`/`diagnostics` blocks from §5.5 are added in Phase 1.9)
+evaluate:
+  inputs:
+    gcl_train_run: latest           # embeddings + manifest chain to text/structural stores and nodes.parquet
+  neighborhood:
+    ks: [1, 5, 10, 20]
+    views: [text, structural]       # text | structural
+  visualize:
+    enabled: false                  # optional t-SNE scatter; never a reported metric
+    perplexity: 25.0

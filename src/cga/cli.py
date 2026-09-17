@@ -47,6 +47,7 @@ def _run_root(pipeline_name: str, config: dict[str, Any]) -> Path:
     ``training_data`` writes to ``artifacts/training_data/{dataset_id}`` (§5.3),
     one level under ``paths.artifacts`` rather than directly in it.
     ``gcl_train`` writes to ``models/gcl/{dataset_id}`` (§5.4).
+    ``evaluate`` writes to ``artifacts/evaluations/{dataset_id}`` (§5.5/§5.5a).
     """
     dataset_id = config["dataset"]["id"]
     if pipeline_name == "embed":
@@ -60,6 +61,9 @@ def _run_root(pipeline_name: str, config: dict[str, Any]) -> Path:
 
     if pipeline_name == "gcl_train":
         return Path(config["paths"]["models"]) / "gcl" / dataset_id
+
+    if pipeline_name == "evaluate":
+        return Path(config["paths"]["artifacts"]) / "evaluations" / dataset_id
 
     output_subdir = _PIPELINE_OUTPUT_ROOT.get(pipeline_name, pipeline_name)
     return Path(config["paths"][output_subdir]) / dataset_id

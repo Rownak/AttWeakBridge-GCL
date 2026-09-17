@@ -224,72 +224,32 @@ from similarity/sampling.
 
 ---
 
-<!-- Full alignment `evaluate` pipeline (Pipeline 5, §5.5/§8.4 — Hits@k/MRR over alignment pairs,
-     silhouette/similarity-distribution diagnostics) is deferred: out of scope for the paper, and
-     `attack_cwe` has no alignments to rank against anyway. Revisit post-paper. -->
-
 ## Phase 1.8 — Exploratory analysis in the `evaluate` pipeline
 
-Not the alignment-metrics pipeline from §5.5/§8.4 (deferred — see note above). This phase is a
-lighter, paper-focused rewrite of `legacy/GCL/gcl_analysis/2_precision@k_text_graph.py`: does the
-learned embedding preserve the neighborhoods that text similarity and graph/structural similarity
-already define? `1_tsne_plot.py`'s t-SNE plots are ported as optional visualization only, never a
-metric. `3_top_pairs_text_graph.py` is skipped entirely — out of scope.
+Neighborhood-preservation analysis for datasets without alignment labels (§5.5a), ported from
+`legacy/GCL/gcl_analysis/2_precision@k_text_graph.py`. Query is always the learned embedding;
+relevant items are the reference top-k (text or structural), scored per view, per `k`, within
+`graph_role`. Legacy `3_top_pairs_text_graph.py` is not ported.
 
-Two independent reference views, each scored the same way:
-
-- **Text preservation** — reference neighborhood = top-k by cosine similarity in the text-embedding
-  space (e.g. SecBERT/GPT text embeddings). Query = learned node embedding. For each node, does the
-  learned embedding's top-k retrieve the text reference's top-k?
-- **Structural preservation** — reference neighborhood = top-k by cosine similarity in the
-  graph/structural-embedding space (DeepWalk, node2vec) or shortest-path-derived similarity. Same
-  retrieval question, structural reference instead of text.
-
-Relevance label for both views: node `j` is "relevant" to query node `i` iff `j` is in `i`'s
-reference top-k (text or structural, per view). Retrieval direction is always *learned embedding →
-reference top-k*, never the reverse — this measures whether the learned space preserves an existing
-neighborhood, not whether the reference recovers the learned one.
-
-Metrics, computed per view (text, structural), each restricted to same-`graph_role` comparisons
-(`attack`↔`attack`, `cwe`↔`cwe`) matching the legacy split, and reported per `k`:
-
-- **Precision@k** — `|top_k(learned) ∩ top_k(reference)| / k`, averaged over nodes. Interpretation:
-  fraction of the learned neighborhood that agrees with the reference neighborhood.
-- **Hit@k** — 1 if the reference's single nearest neighbor (k=1 relevant item) appears in the
-  learned top-k, else 0, averaged over nodes. Interpretation: how often the single most-relevant
-  reference node is retrievable at all within budget k.
-- **MRR** — mean of `1/rank` of the reference's nearest neighbor within the learned ranking,
-  averaged over nodes. Interpretation: how highly the single most-relevant reference node is ranked,
-  not just whether it made the cutoff.
-
-- [ ] `pipelines/evaluate/metrics.py` — `precision_at_k`, `hit_at_k`, `mrr`, all taking a learned
-      similarity matrix and a reference similarity matrix (or reference top-k indices) plus `ks`;
-      pure functions, no I/O.
-- [ ] `pipelines/evaluate/reference_neighborhoods.py` — build text and structural reference
-      similarity from the `embed` pipeline's stores (no separate reference model to train).
-- [ ] `pipelines/evaluate/visualize.py` — optional t-SNE scatter of learned embeddings colored by
-      `graph_role`, ported from `1_tsne_plot.py::tsne_plot1`; explicitly not used for metrics.
-- [ ] `pipelines/evaluate/pipeline.py` — `load` (learned embeddings via `gcl_train` manifest chain,
-      plus text/structural embedding stores) → `score` (metrics.py over both views, all `ks`) →
+- [x] `pipelines/evaluate/metrics.py` — `precision_at_k`, `hit_at_k`, `mrr`, `rank_by_similarity`
+      (deterministic tie-break by node id), `top_k` as pure functions over ranked id lists.
+- [x] `pipelines/evaluate/neighborhood.py` — `score_view`: reference top-k from the text and
+      structural embedding stores, restricted to same-`graph_role` pairs and nodes eligible in both
+      the learned and reference matrix.
+- [x] `pipelines/evaluate/visualize.py` — optional t-SNE scatter colored by `graph_role`, ported from
+      `1_tsne_plot.py::tsne_plot1`; visualization only, never a reported metric.
+- [x] `pipelines/evaluate/pipeline.py` — `load` (resolve the `gcl_train` run and follow its manifest
+      chain to `training_data` → `ingest`/text/structural embedding stores) → `neighborhood` →
       `visualize` (optional) → `validate_and_manifest`, writing
       `artifacts/evaluations/{dataset_id}/{run_id}/metrics.json` (+ `plots/` if enabled).
-- [ ] `configs/pipelines/evaluate.yaml` — `ks`, `views: [text, structural]`, `visualize.enabled`.
-- [ ] Tests: `precision_at_k`/`hit_at_k`/`mrr` on hand-built toy similarity matrices with known
-      answers; same-`graph_role` restriction excludes cross-role pairs; `score` is order-independent
-      w.r.t. how reference top-k ties are broken (documented, not silently nondeterministic).
-- [ ] Verify: `cga run evaluate --dataset attack_cwe` on the Phase 1.7 run writes `metrics.json` with
-      precision@k/hit@k/MRR for both text and structural views across configured `ks`.
-
----
-
-## Phase 1.9 — Finalize
-
-- [ ] `pipelines/embed/finetune.py` — MLM/CLM continued pretraining → `models/llm/{slug}/{run_id}/`,
-      wired as the optional first `embed` step.
-- [ ] `scripts/check_env.py` (port from legacy) and `scripts/run_all.sh` chaining the five pipelines
-      for one experiment config.
-- [ ] `tests/integration/` — each pipeline end-to-end on `attack_cwe` with `epochs: 2`, asserting
-      manifests, schemas, shapes, and referential integrity.
-- [ ] `README.md` — install, dataset setup, the five commands, adding a new dataset (§10).
-- [ ] Full run: `scripts/run_all.sh` on `attack_cwe`, then `cga inspect` on the evaluation run to
-      confirm the manifest chain reaches back through gcl_train and ingest to raw file hashes.
+- [x] `configs/pipelines/evaluate.yaml` — `inputs.gcl_train_run`, `neighborhood` block (`ks`,
+      `views: [text, structural]`), `visualize.enabled`.
+- [x] Tests: each metric on a hand-computed toy case (`tests/unit/pipelines/evaluate/test_metrics.py`);
+      cross-`graph_role` exclusion and reference-eligibility filtering
+      (`test_neighborhood.py`); end-to-end pipeline test against a fabricated `gcl_train` run,
+      including an unknown-view `ConfigError` and byte-identical metrics across two runs
+      (`test_pipeline.py`).
+- [x] Verify: `cga run evaluate --dataset attack_cwe` on the real Phase 1.7 run (`node_embeddings`
+      shape `(1136, 128)`) writes precision@k/hit@k/MRR for both views across `ks: [1, 5, 10, 20]`
+      (e.g. text/graph_1 hit@1 = 0.217, structural/graph_2 hit@1 = 0.274); re-running produced a
+      byte-identical `metrics.json`.

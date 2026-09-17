@@ -2,4 +2,4 @@
 
 from __future__ import annotations
 
-from cga.pipelines import embed, gcl_train, ingest, training_data  # noqa: F401
+from cga.pipelines import embed, evaluate, gcl_train, ingest, training_data  # noqa: F401
