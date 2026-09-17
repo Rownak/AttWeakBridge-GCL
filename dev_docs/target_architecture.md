@@ -47,7 +47,7 @@ Derived from the legacy properties in `existing_architecture.md` §10:
 |---|---|
 | Identity is an implicit array row (`doc_id_to_emb_id`); a dropped text shifts every downstream array | Every stored vector, edge, and training example carries a **stable canonical `node_id`**. Arrays are never consumed without their sidecar index. |
 | Hardcoded to one dataset; ATT&CK/CWE names throughout the pipeline code | One canonical schema; all dataset-specific logic isolated in registered adapters. |
-| No orchestration; ~13 scripts run by hand from specific directories | Four pipelines behind one CLI, a pipeline registry, explicit upstream-run references. |
+| No orchestration; ~13 scripts run by hand from specific directories | Five pipelines behind one CLI, a pipeline registry, explicit upstream-run references. |
 | Global mutable `config.py`; hyperparameters hardcoded in five files | Layered YAML (`base` → `dataset` → `pipeline` → `experiment` → CLI overrides), validated on load, snapshotted into every run. |
 | Silent truncation on exception; stale artifacts consumed unnoticed | Per-node status tables, artifact validation on read, hashes in manifests, fail-fast on mismatch. |
 | No seeds, no provenance | One seed per run applied to all RNGs; a `manifest.json` per run linking config, upstream run ids, code revision, input hashes. |
@@ -75,7 +75,8 @@ Non-goals: distributed execution, experiment UI, remote storage, model serving.
 │   │   ├── ingest.yaml
 │   │   ├── embed.yaml
 │   │   ├── training_data.yaml
-│   │   └── gcl_train.yaml
+│   │   ├── gcl_train.yaml
+│   │   └── evaluate.yaml
 │   └── experiments/                #   named overlays spanning pipelines
 │       └── attack_cwe_secroberta_gcn.yaml
 │
@@ -122,17 +123,20 @@ Non-goals: distributed execution, experiment UI, remote storage, model serving.
 │   │   │   ├── pipeline.py         #   Pipeline 3
 │   │   │   ├── similarity.py
 │   │   │   └── samplers.py
-│   │   └── gcl_train/
-│   │       ├── pipeline.py         #   Pipeline 4
-│   │       ├── models.py           #     DualEncoder, GCN/GAT towers
-│   │       ├── losses.py           #     triplet, jsd, infonce
-│   │       ├── trainer.py
-│   │       └── evaluate.py         #     retrieval metrics against alignment pairs
+│   │   ├── gcl_train/
+│   │   │   ├── pipeline.py         #   Pipeline 4
+│   │   │   ├── models.py           #     DualEncoder, GCN/GAT towers
+│   │   │   ├── losses.py           #     triplet, jsd, infonce
+│   │   │   └── trainer.py
+│   │   └── evaluate/
+│   │       ├── pipeline.py         #   Pipeline 5
+│   │       ├── ranking.py          #     Hits@k / MRR against alignment pairs
+│   │       └── diagnostics.py      #     unsupervised checks when alignments are absent
 │   └── py.typed
 │
 ├── scripts/
 │   ├── check_env.py
-│   └── run_all.sh                  # chains the four pipelines for one experiment
+│   └── run_all.sh                  # chains the five pipelines for one experiment
 │
 ├── data/
 │   ├── raw/                        # immutable source data, one dir per DATASET PAIR
@@ -147,7 +151,8 @@ Non-goals: distributed execution, experiment UI, remote storage, model serving.
 │
 ├── artifacts/
 │   ├── embeddings/{dataset_id}/{embedder_id}/{run_id}/
-│   └── training_data/{dataset_id}/{run_id}/
+│   ├── training_data/{dataset_id}/{run_id}/
+│   └── evaluations/{dataset_id}/{run_id}/
 │
 ├── models/
 │   ├── llm/{base_model_slug}/{run_id}/
@@ -163,6 +168,21 @@ Non-goals: distributed execution, experiment UI, remote storage, model serving.
 **Why `data/` `artifacts/` `models/` are separate roots.** Different lifecycles and different future
 owners: `data/` is what DVC will version, `models/` is what an MLflow registry will log, `artifacts/`
 is derived and garbage-collectable by run id.
+
+**`core/` stays boring.** Its modules exist to be the integration surface for MLflow, Hydra, and DVC
+later (§11) — not to become an execution framework. Concretely, `core/` **must not** grow:
+
+- a DAG or dependency resolver between steps — `Pipeline.run()` is `for step in self.steps: step(ctx)`,
+  in declaration order, nothing more;
+- conditional, parallel, or retry-based step scheduling;
+- config-driven step composition (steps are Python attributes of a pipeline class, not YAML entries);
+- a plugin lifecycle beyond `registry.register(name)` at import time;
+- generic read/write wrappers in `io.py` — it holds schema-enforced Parquet/npy/JSON helpers and
+  `sha256_file`, because hashing must happen in one place (§8.3), and nothing else.
+
+The declared inputs/outputs on each step earn their keep by mapping onto `dvc.yaml` stages; anything
+beyond that declaration is orchestration this project does not do. If a `core/` module starts looking
+like Kedro, the abstraction has overshot and should be pushed back down into the pipeline that needed it.
 
 **Testing data.** `attack_cwe` (1,136 nodes, 2,078 edges) is small enough to serve as the development
 and integration-test dataset directly; no separate fixture subset is maintained. `ncit_doid` is
@@ -385,9 +405,15 @@ dataset = one adapter package + one `configs/datasets/<name>.yaml`.** No file ou
 
 ## 5. Pipelines
 
-Four pipelines, each registered by name, each a sequence of steps that declare the artifacts they
+Five pipelines, each registered by name, each a sequence of steps that declare the artifacts they
 read and write so the base class can validate inputs before work starts and write the manifest at
 the end. **Only Pipeline 1 is dataset-aware**, and only through the adapter registry.
+
+Pipelines 1–4 form the training chain; Pipeline 5 (`evaluate`) is separate because it consumes a
+finished model's exported embeddings rather than the trainer's internals. Keeping it out of
+`gcl_train` means changing `eval.ks` does not change `gcl_train`'s `config_hash` and therefore does
+not invalidate a completed training run — and it is what lets MLflow evaluate a registered model
+version, and DVC re-run evaluation as its own stage, without retraining.
 
 ### 5.1 `ingest` — dataset adapter → canonical graph artifacts
 
@@ -463,9 +489,9 @@ Steps:
 
 | | |
 |---|---|
-| **Inputs** | `examples.parquet` + `universe.parquet` from a `training_data` run; the two embedding stores resolved **via that run's manifest** (so they cannot be mismatched); `edges.parquet`; `alignments.parquet` for evaluation |
-| **Config** | encoder (`gcn`/`gat`, dims, heads), loss (`triplet`/`jsd`/`infonce`, margin, alpha), optimizer, epochs, checkpointing, eval |
-| **Outputs** → `models/gcl/{dataset_id}/{run_id}/` | `config.resolved.yaml`, `manifest.json`, `checkpoints/`, `metrics.jsonl`, `node_embeddings/` (AlignedMatrix), `eval/metrics.json` |
+| **Inputs** | `examples.parquet` + `universe.parquet` from a `training_data` run; the two embedding stores resolved **via that run's manifest** (so they cannot be mismatched); `edges.parquet`; `alignments.parquet` when in-loop monitoring is on |
+| **Config** | encoder (`gcn`/`gat`, dims, heads), loss (`triplet`/`jsd`/`infonce`, margin, alpha), optimizer, epochs, checkpointing, optional in-loop monitoring |
+| **Outputs** → `models/gcl/{dataset_id}/{run_id}/` | `config.resolved.yaml`, `manifest.json`, `checkpoints/`, `metrics.jsonl`, `node_embeddings/` (AlignedMatrix) |
 
 Steps:
 
@@ -476,8 +502,33 @@ Steps:
    `{epoch, loss, loss_text, loss_graph, lr, elapsed_s}` appended to `metrics.jsonl`; checkpoint
    every `checkpoint_every` epochs and at the end.
 3. `export` — final per-node embeddings as an `AlignedMatrix` keyed by `node_id`.
-4. `evaluate` — see §8.4.
-5. `manifest`, `LATEST`.
+4. `manifest`, `LATEST`.
+
+`monitor.enabled` optionally runs the same ranking code every `monitor.every` epochs and appends
+`{"epoch": …, "eval": {…}}` rows to `metrics.jsonl`, for watching a run in progress. It is a
+convenience, not the reported result: authoritative metrics come from Pipeline 5, which is the only
+thing that writes evaluation results.
+
+### 5.5 `evaluate` — alignment metrics and diagnostics
+
+| | |
+|---|---|
+| **Inputs** | `node_embeddings/` (AlignedMatrix) from a `gcl_train` run; `nodes.parquet` for `graph_role` and `alignments.parquet`, both resolved **via that run's manifest chain** |
+| **Config** | `gcl_run` ref, `ks`, candidate-pool usage, diagnostic toggles |
+| **Outputs** → `artifacts/evaluations/{dataset_id}/{run_id}/` | `metrics.json`, `rankings.parquet` (optional per-pair detail), `manifest.json` |
+
+Steps:
+
+1. `load` — resolve the `gcl_train` run, read its manifest, follow `inputs[]` back to the `ingest`
+   run that produced `nodes.parquet` / `alignments.parquet`, and load the exported embeddings.
+   Nothing is passed in by hand, so an evaluation cannot be run against mismatched sources.
+2. `rank` — with alignments present, score each test pair (§8.4); skipped when there are none.
+3. `diagnose` — unsupervised checks (§8.4), always run.
+4. `validate_and_manifest`.
+
+Because it reads only the exported `AlignedMatrix`, this pipeline evaluates any saved model — an
+older run, a checkpoint re-export, or eventually a model pulled from an MLflow registry — without
+touching `gcl_train`.
 
 ---
 
@@ -557,14 +608,16 @@ Empty for datasets without ground truth; consumers must handle zero rows.
 
 ### 6.7 `metrics.jsonl`
 
-One object per epoch: `{"epoch": 12, "loss": 0.41, "loss_text": 0.39, "loss_graph": 0.43, "lr": 1e-3, "elapsed_s": 0.8}`; eval steps append `{"epoch": …, "eval": {…}}`.
+One object per epoch: `{"epoch": 12, "loss": 0.41, "loss_text": 0.39, "loss_graph": 0.43, "lr": 1e-3, "elapsed_s": 0.8}`; in-loop monitoring (`gcl_train.monitor`) appends `{"epoch": …, "eval": {…}}`.
+Authoritative metrics live in the `evaluate` run's `metrics.json`, not here.
 
 ### 6.8 Model manifests
 
 `models/llm/…` adds `base_model` (+revision), `objective` (`mlm`/`clm`), `text_variant`,
 `texts_run_id`, epochs, effective batch size, final loss.
 `models/gcl/…` adds `training_data_run_id`, `text_embedding_run_id`, `graph_embedding_run_id`,
-`universe_sha256`, `n_nodes`, `n_examples`, `final_loss`, eval summary. Checkpoints embed
+`universe_sha256`, `n_nodes`, `n_examples`, `final_loss`. Evaluation metrics live in the `evaluate`
+run that references this model, not here. Checkpoints embed
 `universe_sha256` so a checkpoint refuses to load against a different node ordering.
 
 ---
@@ -767,13 +820,31 @@ gcl_train:
     epochs: 400
     checkpoint_every: 50
     log_every: 10
-  eval:
-    enabled: true                   # no-ops when the dataset has no alignments
-    every: 50
+  monitor:
+    enabled: false                  # in-loop progress metrics only, appended to metrics.jsonl;
+    every: 50                       # authoritative results come from `cga run evaluate`
     ks: [1, 5, 10]
 ```
 
-### 7.8 `configs/experiments/attack_cwe_secroberta_gcn.yaml`
+### 7.8 `configs/pipelines/evaluate.yaml`
+
+```yaml
+evaluate:
+  inputs:
+    gcl_run: latest                 # nodes/alignments resolved from its manifest chain
+  ranking:
+    enabled: true                   # no-ops when the dataset has no alignments
+    ks: [1, 5, 10]
+    use_candidate_pool: true        # rank within test.cands.tsv when the dataset supplies it
+    also_full_target_set: true      # and over every graph_2 node
+  diagnostics:
+    silhouette: true                # over graph_role
+    similarity_distribution: true
+    neighbor_samples: 50            # nearest cross-graph neighbours dumped for inspection
+  write_rankings: false             # per-pair detail to rankings.parquet
+```
+
+### 7.9 `configs/experiments/attack_cwe_secroberta_gcn.yaml`
 
 ```yaml
 # Each top-level key overlays the matching pipeline config.
@@ -784,6 +855,8 @@ training_data:
 gcl_train:
   model: {encoder: gcn}
   loss:  {name: triplet, margin: 1.0, alpha: 0.5}
+evaluate:
+  ranking: {ks: [1, 5, 10]}
 ```
 
 ---
@@ -824,7 +897,8 @@ pipeline cannot read an artifact it failed to declare.
 
 ### 8.4 Evaluation
 
-Runs inside `gcl_train.evaluate`, entirely generic:
+Pipeline 5 (§5.5), entirely generic — it reads an exported `AlignedMatrix`, `nodes.parquet` for
+`graph_role`, and `alignments.parquet`, and knows nothing about any dataset:
 
 - **With alignments** (`ncit_doid`): for each test pair, rank `graph_2` candidates by cosine
   similarity to the `graph_1` node — over the full `graph_2` node set, and over the supplied
@@ -834,7 +908,9 @@ Runs inside `gcl_train.evaluate`, entirely generic:
   `graph_role`, cross-graph similarity distribution, nearest-cross-graph-neighbor samples dumped for
   manual inspection.
 
-Both write `eval/metrics.json`; the ranking block is absent when `alignments.parquet` is empty.
+Both write `artifacts/evaluations/{dataset_id}/{run_id}/metrics.json`; the ranking block is absent
+when `alignments.parquet` is empty. `gcl_train.monitor` may run the same ranking code in-loop for
+progress visibility, but only this pipeline writes the reported numbers.
 
 ### 8.5 Logging, reproducibility, error handling
 
@@ -853,7 +929,8 @@ Both write `eval/metrics.json`; the ranking block is absent when `alignments.par
   `AlignedMatrix.select` (missing id, reorder); `EmbeddingStore` resume semantics (failed row
   re-runs, `ok` row untouched); each sampler on a toy matrix; each loss against hand-computed
   values; **each adapter against a handful of committed source snippets** (a few STIX objects, a few
-  `owl:Class` blocks, a few TSV rows) asserting the canonical records they produce.
+  `owl:Class` blocks, a few TSV rows) asserting the canonical records they produce; Hits@k / MRR on a
+  toy ranking and the zero-alignment no-op path.
 - `tests/integration/` — each pipeline end-to-end on `attack_cwe` with `epochs: 2`, asserting
   manifests, schemas, shapes, and referential integrity.
 
@@ -894,7 +971,13 @@ data/raw/{dataset_id}/…            (attack.json + cwec.xml  |  ncit.owl + doid
                   config.resolved.yaml, manifest.json
                   checkpoints/, metrics.jsonl
                   node_embeddings/{vectors.npy, index.parquet}   ← research output
-                  eval/metrics.json                              ← Hits@k / MRR, or diagnostics
+                              │
+                              ▼
+                     cga run evaluate
+            artifacts/evaluations/{ds}/{run}/
+              metrics.json        ← Hits@k / MRR, or unsupervised diagnostics
+              rankings.parquet    ← optional per-pair detail
+              manifest.json       ← records the gcl_train run it scored
 ```
 
 Identity flows as `node_id` strings through every arrow. Positions are computed exactly once, in
@@ -910,9 +993,9 @@ Identity flows as `node_id` strings through every arrow. Positions are computed 
 2. Create `configs/datasets/<name>.yaml` following the shape in §7.3–7.4.
 3. Place source files under `data/raw/<name>/`.
 4. Add a unit test asserting the adapter's canonical output on committed source snippets.
-5. Run `cga run ingest --dataset <name>`, then the remaining three pipelines unchanged.
+5. Run `cga run ingest --dataset <name>`, then the remaining four pipelines unchanged.
 
-No change to `cga/core/`, `cga/data/`, or any of the four pipelines.
+No change to `cga/core/`, `cga/data/`, or any of the five pipelines.
 
 ---
 
@@ -920,9 +1003,9 @@ No change to `cga/core/`, `cga/data/`, or any of the four pipelines.
 
 | Tool | What it will own | Why the current design fits |
 |---|---|---|
-| **MLflow** | experiment tracking, model registry | `RunContext` is the single place a run starts and ends — an `MlflowTracker` mirrors `manifest.json` params and `metrics.jsonl` rows; `models/llm` and `models/gcl` become logged artifacts. No pipeline code changes. |
+| **MLflow** | experiment tracking, model registry | `RunContext` is the single place a run starts and ends — an `MlflowTracker` mirrors `manifest.json` params and `metrics.jsonl` rows; `models/llm` and `models/gcl` become logged artifacts, and the standalone `evaluate` pipeline (§5.5) already scores a model from its exported embeddings alone, which is how a registered model version is evaluated. No pipeline code changes. |
 | **Hydra** | config composition, sweeps | `configs/` is already grouped (`datasets/`, `pipelines/`, `experiments/`) with the same override semantics; `core/config.resolve()` is the only function to swap. Interpolation is kept to what OmegaConf supports. |
-| **DVC** | data/artifact versioning, stage DAG | `data/`, `artifacts/`, `models/` are separate roots with immutable run dirs; each pipeline's declared inputs/outputs map 1:1 onto `dvc.yaml` stages (`cga run <p>` is the `cmd`). `LATEST` files become DVC-tracked. |
+| **DVC** | data/artifact versioning, stage DAG | `data/`, `artifacts/`, `models/` are separate roots with immutable run dirs; each pipeline's declared inputs/outputs map 1:1 onto `dvc.yaml` stages (`cga run <p>` is the `cmd`). `LATEST` files become DVC-tracked. Evaluation being its own stage means re-scoring does not invalidate a completed training stage. |
 | **PySpark** | scaling similarity/sampling to full ontologies | Every record artifact is Parquet with a declared schema and string keys — readable by Spark with no conversion; `similarity` and `sample` are pure functions over tables, swappable behind the same `Step` interface. |
 
 Guardrails that keep these open: no pickle between pipelines; no experiment parameters encoded in

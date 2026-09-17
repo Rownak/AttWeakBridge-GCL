@@ -149,3 +149,78 @@ uv run cga run ingest --dataset attack_cwe
 uv run cga validate data/processed/attack_cwe/<run_id>
 uv run cga run ingest --dataset ncit_doid
 ```
+
+---
+
+## Phase 1.2 — Split `evaluate` into its own pipeline; constrain `core/`
+
+### What was implemented
+
+Two changes to [target_architecture.md](dev_docs/target_architecture.md), both prompted by an
+external ML research engineer's review of the design:
+
+1. **Evaluation promoted from a `gcl_train` step to Pipeline 5** (`evaluate`), with its own package,
+   config file, artifact root, and manifest.
+2. **A "`core/` stays boring" constraint added to §2**, bounding what the framework layer may grow
+   into.
+
+Phase numbering in [sprint_1.md](dev_docs/sprints/sprint_1.md) shifted: the old Phase 1.6
+(`gcl_train` + evaluation) became Phase 1.6 (`gcl_train` only) and a new Phase 1.7 (`evaluate`);
+Finalize moved 1.7 → 1.8.
+
+### Approach / key decisions
+
+- **Accepted the reviewer's evaluate split, for stronger reasons than they gave.** Their argument was
+  convenience (evaluating saved models independently). The operative reasons here are (a) with
+  `evaluate` inside `gcl_train`, changing `eval.ks` changes `gcl_train`'s `config_hash` and
+  invalidates a completed 400-epoch run — a cost that exists today, not just after tooling adoption;
+  (b) MLflow evaluates a *registered model version*, which is a separate run by construction;
+  (c) DVC gets a re-runnable evaluation stage that does not dirty the training stage.
+- **`evaluate` resolves its own inputs by walking the manifest chain.** It takes a `gcl_train` run
+  ref, reads that run's manifest, and follows `inputs[]` back to the `ingest` run for
+  `nodes.parquet` / `alignments.parquet`. Nothing is passed by hand, so an evaluation cannot be run
+  against mismatched sources — the same guard `training_data` → `gcl_train` already uses.
+- **Kept in-loop metrics, renamed to `gcl_train.monitor`** (default off). It calls the same
+  `ranking.py` and appends to `metrics.jsonl` for watching a run in progress, but only Pipeline 5
+  writes reported numbers. Naming it `monitor` rather than `eval` makes the split unambiguous.
+- **Rejected the reviewer's other simplifications** (dropping `registry.py`, `manifest.py`,
+  `pipeline.py`, `io.py`). Each is a planned integration surface: the registry is what makes §10's
+  "add a dataset without touching core" promise true and already backs five component families; the
+  manifest is both the traceability guarantee and the MLflow mirror point; declared step inputs and
+  outputs are what map onto `dvc.yaml` stages.
+- **Converted their valid underlying concern into an explicit constraint instead.** The reviewer
+  correctly identified a failure mode (`core/` drifting into a home-grown Kedro) but aimed it at the
+  wrong files. §2 now forbids the specific things that would constitute that drift — DAG/dependency
+  resolution, conditional or parallel step scheduling, config-driven step composition, a plugin
+  lifecycle beyond import-time registration, and generic wrappers in `io.py` — while keeping the
+  modules themselves.
+
+### Files modified
+
+- `dev_docs/target_architecture.md` — §2 tree (`pipelines/evaluate/`, `configs/pipelines/evaluate.yaml`,
+  `artifacts/evaluations/`), new "`core/` stays boring" block, §5 preamble (four → five pipelines,
+  rationale), §5.4 trimmed, new §5.5, §6.7 and §6.8 metric ownership, new §7.8 with §7.9 renumbered,
+  §8.4 rewritten as Pipeline 5, §8.6 eval tests, §9 flow diagram, §11 MLflow and DVC rows.
+- `dev_docs/sprints/sprint_1.md` — Objective, Phase 1.6 narrowed, new Phase 1.7, Finalize → 1.8.
+
+### Assumptions / limitations
+
+- `evaluate` writes to `artifacts/evaluations/{dataset_id}/{run_id}/` rather than under the model
+  directory, so a model can be scored many times without mutating an immutable run dir. The link
+  runs one way: the evaluation manifest names the `gcl_train` run it scored.
+- `attack_cwe` has no alignments, so the ranking path stays unexercised on real data until
+  `ncit_doid` reaches Phase 1.7 or ground truth is supplied. Phase 1.7 tests cover it with a toy
+  ranking of known answer, and cover the zero-alignment no-op explicitly.
+- The reviewer's recommendation was assessed against the stated MLflow/Hydra/DVC trajectory. Were
+  the project to stay hand-run indefinitely, their case for dropping the framework modules would be
+  considerably stronger.
+
+### CLI commands
+
+No code yet — documentation only. The commands this phase adds to the eventual surface:
+
+```bash
+cga run evaluate --dataset attack_cwe                       # score the latest gcl_train run
+cga run evaluate --dataset attack_cwe --set evaluate.inputs.gcl_run=<run_id>
+cga inspect artifacts/evaluations/attack_cwe/<run_id>       # walk back to raw file hashes
+```

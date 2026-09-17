@@ -1,0 +1,35 @@
+<?xml version="1.0"?>
+<rdf:RDF xmlns="http://ncicb.nci.nih.gov/xml/owl/EVS/Thesaurus.owl#"
+     xml:base="http://ncicb.nci.nih.gov/xml/owl/EVS/Thesaurus.owl"
+     xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+     xmlns:owl="http://www.w3.org/2002/07/owl#"
+     xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#">
+    <owl:Ontology rdf:about="http://ncicb.nci.nih.gov/xml/owl/EVS/Thesaurus.owl"/>
+
+    <owl:Class rdf:about="http://ncicb.nci.nih.gov/xml/owl/EVS/Thesaurus.owl#C7058">
+        <rdfs:label>Neoplasm</rdfs:label>
+        <P90>Neoplasm</P90>
+        <P97>An abnormal growth of tissue.</P97>
+    </owl:Class>
+
+    <owl:Class rdf:about="http://ncicb.nci.nih.gov/xml/owl/EVS/Thesaurus.owl#C3224">
+        <owl:equivalentClass>
+            <owl:Class>
+                <owl:intersectionOf rdf:parseType="Collection">
+                    <rdf:Description rdf:about="http://ncicb.nci.nih.gov/xml/owl/EVS/Thesaurus.owl#C7058"/>
+                </owl:intersectionOf>
+            </owl:Class>
+        </owl:equivalentClass>
+        <rdfs:subClassOf rdf:resource="http://ncicb.nci.nih.gov/xml/owl/EVS/Thesaurus.owl#C7058"/>
+        <rdfs:label>Melanoma</rdfs:label>
+        <P90>Melanoma</P90>
+        <P90>Malignant Melanoma</P90>
+        <P97>A malignant tumor composed of atypical, neoplastic melanocytes.</P97>
+        <P325>A malignant neoplasm composed of melanocytes.</P325>
+    </owl:Class>
+
+    <owl:Class rdf:about="http://ncicb.nci.nih.gov/xml/owl/EVS/Thesaurus.owl#C99999">
+        <rdfs:subClassOf rdf:resource="http://ncicb.nci.nih.gov/xml/owl/EVS/Thesaurus.owl#C000_not_in_file"/>
+        <rdfs:label>Dangling Parent Example</rdfs:label>
+    </owl:Class>
+</rdf:RDF>

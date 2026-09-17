@@ -4,8 +4,8 @@
 
 Build the dataset-agnostic cross-graph alignment system specified in
 [target_architecture.md](../target_architecture.md), replacing the legacy notebook-derived scripts.
-End state: `cga run ingest|embed|training_data|gcl_train --dataset attack_cwe` runs the full pipeline
-end-to-end, `ncit_doid` runs through ingestion, and every phase is covered by unit tests.
+End state: `cga run ingest|embed|training_data|gcl_train|evaluate --dataset attack_cwe` runs the full
+pipeline end-to-end, `ncit_doid` runs through ingestion, and every phase is covered by unit tests.
 
 Legacy code is moved aside in Phase 1.0 and kept intact for reference. Regression testing against
 legacy outputs is **out of scope for this sprint** — it will be planned separately once the
@@ -91,21 +91,27 @@ architecture move is complete.
 
 ## Phase 1.3 — Adapter layer and `ingest` pipeline
 
-- [ ] `adapters/base.py` — `GraphSpec`, `DatasetAdapter` ABC (§4.1), `@register_adapter`.
-- [ ] `adapters/attack_cwe/` — `stix_parser.py`, `cwe_parser.py`, `adapter.py` per §4.2.
-- [ ] `adapters/ncit_doid/` — `owl_parser.py` (streaming `owl:Class` + `rdfs:subClassOf`,
+- [x] `adapters/base.py` — `GraphSpec`, `DatasetAdapter` ABC (§4.1), `@register_adapter`.
+- [x] `adapters/attack_cwe/` — `stix_parser.py`, `cwe_parser.py`, `adapter.py` per §4.2.
+- [x] `tests/regression/test_attack_cwe_legacy_graph.py` — compare `stix_parser`/`cwe_parser` edge
+      output against `legacy/datasets/{ics_attack/attack_graph.json, cwe/cwec_v4.12_graph.json}`
+      `links` (as unordered source/target pairs).
+- [x] `adapters/ncit_doid/` — `owl_parser.py` (streaming `owl:Class` + `rdfs:subClassOf`,
       predicate-map-driven text extraction), `refs_parser.py` (`refs_equiv/*.tsv`, candidate-pool
       parsing without `eval`), `adapter.py` per §4.3.
-- [ ] `pipelines/ingest/pipeline.py` — the six steps in §5.1, writing the four tables + `stats.json`.
-- [ ] `configs/pipelines/ingest.yaml`, `configs/datasets/attack_cwe.yaml`,
+- [x] `pipelines/ingest/pipeline.py` — the six steps in §5.1, writing the four tables + `stats.json`.
+- [x] `configs/pipelines/ingest.yaml`, `configs/datasets/attack_cwe.yaml`,
       `configs/datasets/ncit_doid.yaml` per §7.3–7.4.
-- [ ] `cli.py` — `cga list`, `cga run <pipeline>`, `cga config show`, `cga validate`, `cga inspect`,
+- [x] `cli.py` — `cga list`, `cga run <pipeline>`, `cga config show`, `cga validate`, `cga inspect`,
       `--dry-run`.
-- [ ] Tests: each adapter against committed source snippets in `tests/unit/fixtures/` (a few STIX
-      objects, a few `owl:Class` blocks, a few TSV rows) asserting emitted canonical records;
+- [x] Tests: each adapter against committed source snippets in `tests/unit/adapters/fixtures/` (a few
+      STIX objects, a few `owl:Class` blocks, a few TSV rows) asserting emitted canonical records;
       cross-graph edge raises; duplicate `node_id` raises.
-- [ ] Verify: `cga run ingest --dataset attack_cwe` → 1,136 nodes / 2,078 edges;
-      `cga run ingest --dataset ncit_doid` → alignments populated with train/test splits.
+- [x] Verify: `cga run ingest --dataset attack_cwe` → **1,217 nodes / 1,922 edges** (not the legacy
+      1,136/2,078 — §5.1's node-set policy keeps *all* parsed entities rather than only edge-reachable
+      ones, so this is the architecturally-correct count against the committed `ics-attack.json` /
+      `cwec_v4.12.xml`, confirmed against `tests/regression/`); `cga run ingest --dataset ncit_doid` →
+      24,227 nodes / 18,752 edges, 4,686 alignments populated with train (1,406) / test (3,280) splits.
 
 ---
 
@@ -145,35 +151,51 @@ architecture move is complete.
 
 ---
 
-## Phase 1.6 — `gcl_train` pipeline and evaluation
+## Phase 1.6 — `gcl_train` pipeline
 
 - [ ] `pipelines/gcl_train/models.py` — `DualEncoder` with GCN and GAT towers (port from
       `legacy/GCL/models/GNN_dual_loss2.py`).
 - [ ] `pipelines/gcl_train/losses.py` — `triplet`, `jsd`, `infonce`, registered.
 - [ ] `pipelines/gcl_train/trainer.py` — full-batch loop, `alpha·L_text + (1−alpha)·L_graph`,
       `metrics.jsonl` per epoch, checkpoints embedding `universe_sha256`.
-- [ ] `pipelines/gcl_train/evaluate.py` — Hits@k / MRR when alignments exist; silhouette over
-      `graph_role` + cross-graph similarity stats when they do not.
 - [ ] `pipelines/gcl_train/pipeline.py` — `load` (select every matrix onto the universe, remap ids →
-      rows) → `train` → `export` → `evaluate` → `manifest`.
-- [ ] `configs/pipelines/gcl_train.yaml` and
-      `configs/experiments/attack_cwe_secroberta_gcn.yaml` per §7.7–7.8.
+      rows) → `train` → `export` → `manifest`. No evaluation step: that is Phase 1.7.
+- [ ] `configs/pipelines/gcl_train.yaml` per §7.7 (`monitor` block disabled by default) and
+      `configs/experiments/attack_cwe_secroberta_gcn.yaml` per §7.9.
 - [ ] Tests: each loss against hand-computed values; `load` raises when an example id is outside the
-      universe; checkpoint refuses to load against a mismatched `universe_sha256`;
-      Hits@k on a toy ranking; evaluate no-ops cleanly with zero alignments.
+      universe; checkpoint refuses to load against a mismatched `universe_sha256`.
 - [ ] Verify: `cga run gcl_train --dataset attack_cwe --set gcl_train.train.epochs=5` produces
-      `node_embeddings/` shape `(1136, 128)`, `metrics.jsonl` with 5 rows, and `eval/metrics.json`.
+      `node_embeddings/` shape `(1136, 128)` and `metrics.jsonl` with 5 rows.
 
 ---
 
-## Phase 1.7 — Finalize
+## Phase 1.7 — `evaluate` pipeline
+
+- [ ] `pipelines/evaluate/ranking.py` — Hits@k / MRR over the full `graph_2` node set and over the
+      candidate pool when the dataset supplies one.
+- [ ] `pipelines/evaluate/diagnostics.py` — silhouette over `graph_role`, cross-graph similarity
+      distribution, nearest-cross-graph-neighbour samples.
+- [ ] `pipelines/evaluate/pipeline.py` — `load` (resolve the `gcl_train` run and follow its manifest
+      chain back to `nodes.parquet` / `alignments.parquet`) → `rank` → `diagnose` →
+      `validate_and_manifest`, writing `artifacts/evaluations/{dataset_id}/{run_id}/` per §5.5.
+- [ ] `configs/pipelines/evaluate.yaml` per §7.8.
+- [ ] Wire `gcl_train.monitor` to call `ranking.py` in-loop when enabled, appending
+      `{"epoch": …, "eval": {…}}` to `metrics.jsonl`.
+- [ ] Tests: Hits@k / MRR on a toy ranking with a known answer; `rank` no-ops cleanly with zero
+      alignments while `diagnose` still runs; `load` raises when the manifest chain is broken.
+- [ ] Verify: `cga run evaluate --dataset attack_cwe` on the Phase 1.6 run writes `metrics.json`
+      with diagnostics and no ranking block.
+
+---
+
+## Phase 1.8 — Finalize
 
 - [ ] `pipelines/embed/finetune.py` — MLM/CLM continued pretraining → `models/llm/{slug}/{run_id}/`,
       wired as the optional first `embed` step.
-- [ ] `scripts/check_env.py` (port from legacy) and `scripts/run_all.sh` chaining the four pipelines
+- [ ] `scripts/check_env.py` (port from legacy) and `scripts/run_all.sh` chaining the five pipelines
       for one experiment config.
 - [ ] `tests/integration/` — each pipeline end-to-end on `attack_cwe` with `epochs: 2`, asserting
       manifests, schemas, shapes, and referential integrity.
-- [ ] `README.md` — install, dataset setup, the four commands, adding a new dataset (§10).
-- [ ] Full run: `scripts/run_all.sh` on `attack_cwe`, then `cga inspect` on the GCL run to confirm
-      the manifest chain reaches back to raw file hashes.
+- [ ] `README.md` — install, dataset setup, the five commands, adding a new dataset (§10).
+- [ ] Full run: `scripts/run_all.sh` on `attack_cwe`, then `cga inspect` on the evaluation run to
+      confirm the manifest chain reaches back through gcl_train and ingest to raw file hashes.

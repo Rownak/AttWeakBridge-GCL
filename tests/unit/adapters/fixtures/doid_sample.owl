@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<rdf:RDF xmlns="http://purl.obolibrary.org/obo/doid.owl#"
+     xml:base="http://purl.obolibrary.org/obo/doid.owl"
+     xmlns:obo="http://purl.obolibrary.org/obo/"
+     xmlns:owl="http://www.w3.org/2002/07/owl#"
+     xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+     xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+     xmlns:oboInOwl="http://www.geneontology.org/formats/oboInOwl#">
+    <owl:Ontology rdf:about="http://purl.obolibrary.org/obo/doid.owl"/>
+
+    <owl:Class rdf:about="http://purl.obolibrary.org/obo/DOID_120">
+        <rdfs:label rdf:datatype="http://www.w3.org/2001/XMLSchema#string">female reproductive organ cancer</rdfs:label>
+    </owl:Class>
+
+    <owl:Class rdf:about="http://purl.obolibrary.org/obo/DOID_4362">
+        <rdfs:subClassOf rdf:resource="http://purl.obolibrary.org/obo/DOID_120"/>
+        <oboInOwl:hasExactSynonym rdf:datatype="http://www.w3.org/2001/XMLSchema#string">cervix cancer</oboInOwl:hasExactSynonym>
+        <oboInOwl:hasExactSynonym rdf:datatype="http://www.w3.org/2001/XMLSchema#string">uterine cervical neoplasm</oboInOwl:hasExactSynonym>
+        <obo:IAO_0000115 rdf:datatype="http://www.w3.org/2001/XMLSchema#string">A cervical cancer that is located in the cervix.</obo:IAO_0000115>
+        <rdfs:label rdf:datatype="http://www.w3.org/2001/XMLSchema#string">cervical cancer</rdfs:label>
+    </owl:Class>
+
+    <owl:Class rdf:about="http://purl.obolibrary.org/obo/DOID_9999">
+        <rdfs:subClassOf rdf:resource="http://purl.obolibrary.org/obo/DOID_0000_not_in_file"/>
+        <rdfs:label rdf:datatype="http://www.w3.org/2001/XMLSchema#string">Dangling Parent Example</rdfs:label>
+    </owl:Class>
+</rdf:RDF>

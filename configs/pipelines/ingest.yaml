@@ -1,0 +1,2 @@
+ingest:
+  text_variant_selection: null   # null = ingest every variant declared in dataset.text_variants

@@ -1,0 +1,35 @@
+dataset:
+  id: ncit_doid
+  adapter: ncit_doid
+  root: ${paths.raw}/ncit_doid
+  graphs:
+    graph_1: {key: ncit, display_name: "NCI Thesaurus"}
+    graph_2: {key: doid, display_name: "Disease Ontology"}
+  adapter_config:
+    ncit:
+      file: ncit.owl
+      id_style: fragment             # IRI fragment after '#'
+      edge_predicates: [rdfs:subClassOf]
+      predicate_map:                 # text role -> ontology-specific predicates
+        label:      [rdfs:label]
+        synonym:    [P90]
+        definition: [P97, P325]
+    doid:
+      file: doid.owl
+      id_style: fragment             # IRI fragment after the last '/'
+      edge_predicates: [rdfs:subClassOf]
+      predicate_map:
+        label:      [rdfs:label]
+        synonym:    ["oboInOwl:hasExactSynonym"]
+        definition: ["obo:IAO_0000115"]   # not universal across DOID classes
+    pruning:
+      mode: none                     # none | alignment_reachable
+  text_variants:
+    label:                     [label]
+    label_definition:          [label, definition]
+    label_synonyms_definition: [label, synonym, definition]
+  alignments:
+    equivalence:
+      train: refs_equiv/train.tsv
+      test:  refs_equiv/test.tsv
+      candidates: refs_equiv/test.cands.tsv
