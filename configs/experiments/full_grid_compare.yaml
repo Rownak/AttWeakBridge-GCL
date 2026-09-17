@@ -1,0 +1,47 @@
+# target_architecture.md §7.11 -- comparative evaluation over the full
+# text x graph x architecture grid, run as:
+#   cga run evaluate --dataset attack_cwe --experiment full_grid_compare
+#
+# 12 methods: 4 baseline embedding stores (2 text, 2 structural) plus the 8
+# trained dual-encoders (2 text embedders x 2 graph embedders x {gcn, gat}).
+# Each trained model_id encodes the pairing it was trained on, so a row in the
+# comparison table is self-describing.
+#
+# The textual view's reference is a *generic* text store (bert_base), kept
+# distinct from the two domain-specific text methods under comparison so the
+# relevance set is not defined by one of the competitors.
+evaluate:
+  methods:
+    # --- baselines: structural ---
+    - {method_id: deepwalk,    label: "DeepWalk",          kind: embedding_store, embedder_id: deepwalk-deepwalk,          ref: latest}
+    - {method_id: node2vec,    label: "node2vec",          kind: embedding_store, embedder_id: node2vec-node2vec,          ref: latest}
+    # --- baselines: text ---
+    - {method_id: secroberta,  label: "SecRoBERTa",        kind: embedding_store, embedder_id: hf_mean_pool-pt_SecRoBERTa, ref: latest}
+    - {method_id: securebert2, label: "SecureBERT2.0",     kind: embedding_store, embedder_id: hf_mean_pool-SecureBERT2,   ref: latest}
+    # --- trained dual-encoders: SecRoBERTa text tower ---
+    - {method_id: gcn_secroberta_deepwalk,  label: "GCN SecRoBERTa+DeepWalk",    kind: gcl_run, model_id: gcn-secroberta-deepwalk,  ref: latest}
+    - {method_id: gat_secroberta_deepwalk,  label: "GAT SecRoBERTa+DeepWalk",    kind: gcl_run, model_id: gat-secroberta-deepwalk,  ref: latest}
+    - {method_id: gcn_secroberta_node2vec,  label: "GCN SecRoBERTa+node2vec",    kind: gcl_run, model_id: gcn-secroberta-node2vec,  ref: latest}
+    - {method_id: gat_secroberta_node2vec,  label: "GAT SecRoBERTa+node2vec",    kind: gcl_run, model_id: gat-secroberta-node2vec,  ref: latest}
+    # --- trained dual-encoders: SecureBERT2.0 text tower ---
+    - {method_id: gcn_securebert2_deepwalk, label: "GCN SecureBERT2.0+DeepWalk", kind: gcl_run, model_id: gcn-securebert2-deepwalk, ref: latest}
+    - {method_id: gat_securebert2_deepwalk, label: "GAT SecureBERT2.0+DeepWalk", kind: gcl_run, model_id: gat-securebert2-deepwalk, ref: latest}
+    - {method_id: gcn_securebert2_node2vec, label: "GCN SecureBERT2.0+node2vec", kind: gcl_run, model_id: gcn-securebert2-node2vec, ref: latest}
+    - {method_id: gat_securebert2_node2vec, label: "GAT SecureBERT2.0+node2vec", kind: gcl_run, model_id: gat-securebert2-node2vec, ref: latest}
+  evaluations:
+    - evaluation_id: neigh
+      kind: neighborhood
+      params:
+        ks: [1, 5, 10, 20]
+        roles: [graph_1, graph_2]
+        views:
+          - {view_id: structural_r1, provider: hop_radius, params: {radius: 1}}
+          - {view_id: structural_r2, provider: hop_radius, params: {radius: 2}}
+          - {view_id: textual, provider: cosine_top_k,
+             params: {top_k: 10, reference: {kind: embedding_store, embedder_id: hf_mean_pool-bert_base, ref: latest}}}
+    - evaluation_id: clusters
+      kind: cluster_quality
+      params: {roles: [graph_1, graph_2], n_clusters: [2, 4, 8, 16, 32]}
+  visualize:
+    enabled: true
+    methods: [gcn_securebert2_deepwalk, gat_securebert2_deepwalk]

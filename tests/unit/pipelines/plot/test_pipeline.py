@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pyarrow as pa
@@ -87,7 +88,7 @@ def _write_evaluate_run(evaluate_dir: Path) -> None:
     write_parquet(table, evaluate_dir / "metrics.parquet", schema=METRICS_SCHEMA)
 
 
-def _build_config(tmp_path: Path, *, figures: list[dict] | None = None) -> dict:
+def _build_config(tmp_path: Path, *, figures: list[dict] | None = None, loss_curves_enabled: bool = False) -> dict:
     return {
         "project": "cga",
         "seed": 42,
@@ -105,6 +106,7 @@ def _build_config(tmp_path: Path, *, figures: list[dict] | None = None) -> dict:
             "inputs": {"evaluate_run": "latest"},
             "figures": figures if figures is not None else [],
             "format": {"ext": "png", "dpi": 200},
+            "loss_curves": {"enabled": loss_curves_enabled},
         },
     }
 
@@ -116,6 +118,26 @@ def _setup_evaluate_run(config: dict) -> Path:
     _write_evaluate_run(evaluate_dir)
     write_latest(evaluate_dir.parent, evaluate_dir.name)
     return evaluate_dir
+
+
+def _setup_gcl_run(config: dict, model_id: str, *, n_epochs: int = 3) -> Path:
+    dataset_id = config["dataset"]["id"]
+    model_dir = Path(config["paths"]["models"]) / "gcl" / dataset_id / model_id
+    run_dir = model_dir / f"run-{model_id}"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    with (run_dir / "metrics.jsonl").open("w", encoding="utf-8") as f:
+        for epoch in range(1, n_epochs + 1):
+            record = {
+                "epoch": epoch,
+                "loss": 1.0 / epoch,
+                "loss_text": 1.1 / epoch,
+                "loss_graph": 0.9 / epoch,
+                "lr": 0.001,
+                "elapsed_s": 0.01,
+            }
+            f.write(json.dumps(record) + "\n")
+    write_latest(model_dir, run_dir.name)
+    return run_dir
 
 
 def _run_plot(config: dict) -> RunContext:
@@ -202,3 +224,70 @@ def test_plot_records_evaluate_run_as_manifest_input(tmp_path):
     manifest = read_json(ctx.run_dir / "manifest.json")
     evaluate_input = next(inp for inp in manifest["inputs"] if inp["name"] == "evaluate_run")
     assert evaluate_input["run_id"] == evaluate_dir.name
+
+
+def test_plot_loss_curves_disabled_by_default_produces_no_loss_output(tmp_path):
+    config = _build_config(tmp_path, figures=[NEIGHBORHOOD_FIGURE])
+    _setup_evaluate_run(config)
+    _setup_gcl_run(config, "gcn")
+
+    ctx = _run_plot(config)
+
+    assert not (ctx.run_dir / "figures" / "loss_curve_gcn.png").exists()
+    manifest = read_json(ctx.run_dir / "manifest.json")
+    assert not any(inp["name"].startswith("gcl_run:") for inp in manifest["inputs"])
+    assert manifest["summary"]["loss_curve_model_ids"] == []
+
+
+def test_plot_loss_curves_enabled_writes_one_png_per_model_id(tmp_path):
+    config = _build_config(tmp_path, figures=[], loss_curves_enabled=True)
+    _setup_gcl_run(config, "gcn")
+    _setup_gcl_run(config, "gat")
+
+    ctx = _run_plot(config)
+
+    assert (ctx.run_dir / "figures" / "loss_curve_gcn.png").is_file()
+    assert (ctx.run_dir / "figures" / "loss_curve_gat.png").is_file()
+    manifest = read_json(ctx.run_dir / "manifest.json")
+    assert set(manifest["summary"]["loss_curve_model_ids"]) == {"gcn", "gat"}
+    assert any(inp["name"] == "gcl_run:gcn" for inp in manifest["inputs"])
+    assert any(inp["name"] == "gcl_run:gat" for inp in manifest["inputs"])
+    assert any(o["name"] == "figure_loss_curve_gcn" for o in manifest["outputs"])
+
+
+def test_plot_loss_curves_alongside_metrics_figures(tmp_path):
+    config = _build_config(tmp_path, figures=[NEIGHBORHOOD_FIGURE], loss_curves_enabled=True)
+    _setup_evaluate_run(config)
+    _setup_gcl_run(config, "gcn")
+
+    ctx = _run_plot(config)
+
+    assert (ctx.run_dir / "figures" / "precision_at_k.png").is_file()
+    assert (ctx.run_dir / "figures" / "loss_curve_gcn.png").is_file()
+
+
+def test_plot_loss_curves_enabled_with_empty_figures_does_not_raise(tmp_path):
+    """loss_curves alone is a valid run: no evaluate_run figures required."""
+    config = _build_config(tmp_path, figures=[], loss_curves_enabled=True)
+    _setup_gcl_run(config, "gcn")
+
+    ctx = _run_plot(config)
+
+    assert (ctx.run_dir / "figures" / "loss_curve_gcn.png").is_file()
+    manifest = read_json(ctx.run_dir / "manifest.json")
+    assert not any(inp["name"] == "evaluate_run" for inp in manifest["inputs"])
+
+
+def test_plot_loss_curves_skips_model_id_without_successful_run(tmp_path):
+    config = _build_config(tmp_path, figures=[], loss_curves_enabled=True)
+    _setup_gcl_run(config, "gcn")
+    # gat has a model_id directory but no successful (LATEST) run.
+    gat_dir = Path(config["paths"]["models"]) / "gcl" / config["dataset"]["id"] / "gat"
+    gat_dir.mkdir(parents=True, exist_ok=True)
+
+    ctx = _run_plot(config)
+
+    assert (ctx.run_dir / "figures" / "loss_curve_gcn.png").is_file()
+    assert not (ctx.run_dir / "figures" / "loss_curve_gat.png").exists()
+    manifest = read_json(ctx.run_dir / "manifest.json")
+    assert manifest["summary"]["loss_curve_model_ids"] == ["gcn"]

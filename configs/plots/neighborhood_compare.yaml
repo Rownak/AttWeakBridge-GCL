@@ -9,3 +9,5 @@ plot:
     - {figure_id: silhouette, kind: line,
        select: {evaluation_id: clusters, metric_name: silhouette},
        x: param_value, hue: method_label, facet: [graph_role]}
+  loss_curves:
+    enabled: true                     # also plot all 8 gcl_train model_id loss curves

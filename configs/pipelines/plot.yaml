@@ -7,3 +7,6 @@ plot:
     evaluate_run: latest              # the evaluate run whose metrics.parquet to plot
   figures: []                         # [{figure_id, kind, select, x, hue, facet, params}]
   format: {ext: png, dpi: 200}
+  loss_curves:
+    enabled: false                    # one loss-vs-epoch PNG per gcl_train model_id, auto-discovered
+

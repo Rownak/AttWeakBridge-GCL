@@ -354,3 +354,52 @@ it projects an embedding matrix, not metric rows.
       against the real Phase 1.9 evaluate run writes both figures under
       `artifacts/plots/attack_cwe/{run_id}/figures/`; `cga inspect` traces back to the `evaluate` run
       and its methods; re-running the same spec is a no-op on the numbers (plots only).
+
+### Phase 1.10a — Per-run training loss curves
+
+Added after the initial `plot` pipeline: with all 8 `gcl_train` model_id combinations
+(`{gcn,gat}-{secroberta,securebert2}-{deepwalk,node2vec}`) now trained to 400 epochs, each run's
+`metrics.jsonl` (§6.8: one `{epoch, loss, loss_graph, loss_text, lr, elapsed_s}` object per epoch)
+needs a loss-vs-epoch figure. This is **not** a `metrics.parquet`-driven figure — `gcl_train`'s
+per-epoch losses are training diagnostics, not evaluation metrics, and were deliberately kept out of
+`evaluate`'s output (§6.8: "Authoritative metrics live in the `evaluate` run's `metrics.json`, not
+here"). Per the developer: one figure **per run**, not a cross-run comparison — every `model_id`
+under the dataset gets its own loss-curve PNG, discovered automatically rather than named in config.
+
+- [x] `pipelines/plot/loss_curves.py` — `read_loss_curve(run_dir)` loading `metrics.jsonl` into a
+      small typed structure (epoch, loss, loss_graph, loss_text, lr); `render_loss_curve(rows,
+      output_path, *, title)` drawing three lines (combined/graph/text loss) vs. epoch on one axes,
+      log-scale y-axis (legacy losses span >2 orders of magnitude over 400 epochs). Pure function of
+      the loaded rows, independent of `renderers.py`'s `FigureSpec`/`select` machinery, since there is
+      no `metrics.parquet` row to select here.
+- [x] `pipelines/plot/pipeline.py` — new `discover_gcl_runs(gcl_dataset_dir)` helper: lists every
+      `model_id` directory under `models/gcl/{dataset_id}/`, resolves each one's `LATEST` (skipping a
+      `model_id` with no successful run or whose run has no `metrics.jsonl`), and returns
+      `{model_id: run_dir}`. New `LossCurvesStep` (runs after `render`, before
+      `validate_and_manifest`): for each discovered run, records it as a manifest input
+      (`gcl_run:{model_id}`) via `ctx.resolve` and writes `figures/loss_curve_{model_id}.png`. Gated
+      by `plot.loss_curves.enabled` (default `false`, so existing figure-only configs are unaffected).
+      `LoadStep` now tolerates an empty `figures` list when `loss_curves.enabled` is true, since a
+      loss-curves-only run needs no `evaluate` run at all.
+- [x] `configs/pipelines/plot.yaml` — add `loss_curves: {enabled: false}` block.
+      `configs/plots/neighborhood_compare.yaml` — set `loss_curves.enabled: true` so the paper run
+      also gets every discovered `gcl_train` loss curve alongside the two `metrics.parquet` figures.
+- [x] Tests: `read_loss_curve` parses a hand-written `metrics.jsonl` fixture into the expected rows;
+      `discover_gcl_runs` finds every `model_id` with a `LATEST`, skips one without a successful run
+      or without `metrics.jsonl` (doesn't raise), and is unaffected by the stale flat
+      `models/gcl/{dataset}/LATEST` noted in Phase 1.9's execution log; `render_loss_curve` writes one
+      PNG with three series; end-to-end pipeline tests with `loss_curves.enabled: true` and fabricated
+      `gcl_train` runs assert one `loss_curve_{model_id}.png` and one `gcl_run:{model_id}` manifest
+      input per run, that loss-curves-only (`figures: []`) doesn't raise and needs no `evaluate_run`
+      input, and that a `model_id` without a successful run is skipped without failing the pipeline;
+      `loss_curves.enabled: false` (the default) produces no loss-curve output and no new manifest
+      inputs, so existing behavior is unchanged. 12 new tests across `test_loss_curves.py`,
+      `test_pipeline.py`; full suite 351 passed.
+- [x] Verify: `cga run plot --dataset attack_cwe --config configs/plots/neighborhood_compare.yaml`
+      against the real trained `gcl_train` runs (400 epochs each) writes one
+      `figures/loss_curve_{model_id}.png` per discovered `model_id` — the 8
+      `{gcn,gat}-{secroberta,securebert2}-{deepwalk,node2vec}` combinations plus 2 older standalone
+      `gcn`/`gat` verification runs from Phase 1.9, 10 total — each showing combined/graph/text loss
+      decreasing over 400 epochs; `cga inspect` lists all 10 `gcl_run:{model_id}` inputs alongside the
+      existing `evaluate_run` input, each traceable to its own `training_data`/`embed`/`ingest`
+      chain.
