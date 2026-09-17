@@ -1,0 +1,14 @@
+# Structural-embedder variant of configs/pipelines/embed.yaml (target_architecture.md §7.5).
+# Usage: cga run embed --dataset attack_cwe --config configs/pipelines/embed_deepwalk.yaml
+embed:
+  embedder:
+    kind: deepwalk
+    label: deepwalk
+    dimensions: 128
+    walk_length: 30
+    num_walks: 200
+    window: 5
+    epochs: 10
+    workers: 1                      # >1 makes gensim non-deterministic
+    p: 1.0                          # node2vec only
+    q: 1.0

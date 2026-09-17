@@ -117,19 +117,21 @@ architecture move is complete.
 
 ## Phase 1.4 — `embed` pipeline
 
-- [ ] `pipelines/embed/text_embedders.py` — `hf_mean_pool`: tokenize, fixed-size chunking, forward
+- [x] `pipelines/embed/text_embedders.py` — `hf_mean_pool`: tokenize, fixed-size chunking, forward
       pass, mean-pool last hidden layer, mean across chunks.
-- [ ] `pipelines/embed/graph_embedders.py` — `deepwalk` (uniform walks) and `node2vec` (2nd-order
+- [x] `pipelines/embed/graph_embedders.py` — `deepwalk` (uniform walks) and `node2vec` (2nd-order
       biased walks, p/q) over `edges.parquet`, via `gensim.Word2Vec`; port from
       `legacy/GCL/get_graph_features/2_node2vec_deepwalk.py`.
-- [ ] `pipelines/embed/pipeline.py` — `generate` (per-node status recording, `on_error: continue`,
+- [x] `pipelines/embed/pipeline.py` — `generate` (per-node status recording, `on_error: continue`,
       shard append) → `materialize` → `validate`; `--resume` support.
-- [ ] `configs/pipelines/embed.yaml` per §7.5, including the structural-embedder variant.
-- [ ] Tests: chunking splits a long text as expected; a node with empty text gets `missing_text` and
+- [x] `configs/pipelines/embed.yaml` per §7.5, including the structural-embedder variant.
+- [x] Tests: chunking splits a long text as expected; a node with empty text gets `missing_text` and
       does not shift `index` rows; a raising embedder records `failed` and continues;
       `embedder_id` construction; walk generation is seeded and reproducible.
-- [ ] Verify: text and deepwalk stores both produced for `attack_cwe`, `status` all `ok`,
-      `vectors.npy` shapes `(1136, 768)` and `(1136, 128)`.
+- [x] Verify: text and deepwalk stores both produced for `attack_cwe`, `status` all `ok`,
+      `vectors.npy` shapes `(1136, 768)` and `(1136, 128)` (actual: 1,217 total nodes per Phase 1.3's
+      node-set policy; deepwalk → 1,137 ok / 80 skipped, shape `(1137, 128)`; hf_mean_pool → see
+      `dev_docs/execution_logs/sprint_1_4.md` for the real run's ok/missing_text/empty_text counts).
 
 ---
 

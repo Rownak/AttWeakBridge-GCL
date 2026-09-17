@@ -1,0 +1,23 @@
+embed:
+  inputs:
+    ingest_run: latest
+    text_variant: description
+  embedder:
+    kind: hf_mean_pool              # hf_mean_pool | deepwalk | node2vec
+    model_ref: jackaduma/SecRoBERTa # hub id, or models/llm/<slug>/<run_id>
+    label: pt_SecRoBERTa
+    max_length: 512
+    chunking: fixed
+    add_special_tokens: false       # legacy behavior; flip deliberately, not silently
+    pooling: mean_last_hidden
+    batch_size: 8
+  finetune:
+    enabled: false
+    objective: auto                 # mlm for encoders, clm for gpt2-family
+    epochs: 10
+    lr: 1.0e-4
+    per_device_batch_size: 2
+    grad_accum: 4
+    mlm_probability: 0.15
+  on_error: continue                # continue (record failed) | abort
+  resume: null

@@ -2,4 +2,4 @@
 
 from __future__ import annotations
 
-from cga.pipelines import ingest  # noqa: F401
+from cga.pipelines import embed, ingest  # noqa: F401

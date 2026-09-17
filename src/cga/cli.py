@@ -37,6 +37,25 @@ _PIPELINE_OUTPUT_ROOT = {
 }
 
 
+def _run_root(pipeline_name: str, config: dict[str, Any]) -> Path:
+    """Return the parent directory ``{run_id}/`` is created under for this pipeline.
+
+    Most pipelines write to ``{paths.<subdir>}/{dataset_id}``. ``embed`` nests
+    one further level under the run's ``embedder_id`` (target_architecture.md
+    §5.2), which depends on the resolved ``embed.embedder`` config block, so it
+    cannot be expressed by the generic ``_PIPELINE_OUTPUT_ROOT`` lookup alone.
+    """
+    dataset_id = config["dataset"]["id"]
+    if pipeline_name == "embed":
+        from cga.pipelines.embed.pipeline import build_embedder_id
+
+        embedder_id = build_embedder_id(config["embed"]["embedder"])
+        return Path(config["paths"]["artifacts"]) / "embeddings" / dataset_id / embedder_id
+
+    output_subdir = _PIPELINE_OUTPUT_ROOT.get(pipeline_name, pipeline_name)
+    return Path(config["paths"][output_subdir]) / dataset_id
+
+
 def _dataset_config_path(dataset_id: str) -> Path:
     return _CONFIG_ROOT / "datasets" / f"{dataset_id}.yaml"
 
@@ -116,8 +135,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     pipeline_cls = pipelines.get(pipeline_name)
     pipeline = pipeline_cls()
 
-    output_subdir = _PIPELINE_OUTPUT_ROOT.get(pipeline_name, pipeline_name)
-    run_root = Path(config["paths"][output_subdir]) / config["dataset"]["id"]
+    run_root = _run_root(pipeline_name, config)
 
     ctx = RunContext.create(
         pipeline_name=pipeline_name,
