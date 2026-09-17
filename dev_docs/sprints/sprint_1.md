@@ -253,3 +253,71 @@ relevant items are the reference top-k (text or structural), scored per view, pe
       shape `(1136, 128)`) writes precision@k/hit@k/MRR for both views across `ks: [1, 5, 10, 20]`
       (e.g. text/graph_1 hit@1 = 0.217, structural/graph_2 hit@1 = 0.274); re-running produced a
       byte-identical `metrics.json`.
+
+---
+
+## Phase 1.9 — Comparative `evaluate` pipeline
+
+Rework `evaluate` from scoring one model into comparing **several embedding methods side by side**
+under one or more registered **evaluations** (§5.5, §5.5a, §6.10; rationale in
+`dev_docs/design_recommendation.md`). A *method* is any per-node `AlignedMatrix` — a baseline
+embedding store or a trained model's export — so baselines and models are scored by the same code on
+the same node universe. This produces the paper's comparison table and makes a new evaluation a new
+file rather than a pipeline change. Phase 1.8's `metrics.py` and `visualize.py` carry over;
+`neighborhood.py` is replaced.
+
+- [x] `pipelines/gcl_train/pipeline.py` + `cli._run_root` — partition output by `model_id` (default
+      `model.encoder`) → `models/gcl/{dataset_id}/{model_id}/{run_id}/`, so `gcn` and `gat` keep
+      separate `LATEST` pointers. Prerequisite: today's flat `LATEST` makes a GCN-vs-GAT comparison
+      unexpressible with `ref: latest`. Existing runs become invisible under the new layout; re-run
+      both trainings, no compatibility shim.
+- [x] `pipelines/evaluate/rows.py` — `MetricRow` + long-form `metrics.parquet` writer per §6.10
+      (`METRICS_SCHEMA` in `data/schemas.py`), plus the nested `metrics.json` digest **derived from
+      the same rows** so the two cannot drift.
+- [x] `pipelines/evaluate/metrics.py` — generalize to relevance **sets**: `normalized_precision_at_k`
+      (`|L_k ∩ R| / min(k,|R|)`), `recall_at_k` (`|L_k ∩ R| / |R|`), set-based `hit_at_k` and `mrr`.
+      Both precision columns are emitted so neither is mislabeled when `k > |R|`.
+- [x] `pipelines/evaluate/methods.py` — `MethodSpec` + `load_method` resolving `embedding_store`
+      (`artifacts/embeddings/{dataset}/{embedder_id}/`) and `gcl_run`
+      (`models/gcl/{dataset}/{model_id}/` → `node_embeddings/`). Each lands in `manifest.inputs[]` as
+      `method:<id>`; a view's reference block reuses the same spec and loader.
+- [x] `pipelines/evaluate/evaluators/neighborhood.py` — owns the methods × views × `graph_role` × `k`
+      loop, with a `relevance_providers` registry for views: `hop_radius` (relevant = all nodes within
+      radius `r`, radius-bounded BFS on the fly, isolates fall out via an empty set) and
+      `cosine_top_k` (top-k over a declared reference store). Eligibility intersects the **candidate
+      pool** across methods, not just the query set, so precision stays comparable; `query_set_sha256`
+      records that the methods shared a query set.
+- [x] `pipelines/evaluate/evaluators/cluster_quality.py` — methods × `graph_role` × `n_clusters`,
+      silhouette. Closes the §8.4 diagnostic promise and is the second implementation that proves the
+      evaluator layer is a layer.
+- [x] `pipelines/evaluate/pipeline.py` — rewrite to four kind-agnostic steps: `load` (validate config,
+      resolve `ingest_run`, build the graph, `load_method` every method and reference) → `evaluate`
+      (registry lookup per `evaluations[]` entry, collect rows) → `visualize` (optional, per method) →
+      `validate_and_manifest`. Deleted `neighborhood.py`. Each evaluator validates its own opaque
+      `params` with its own pydantic model.
+- [x] `configs/pipelines/evaluate.yaml` — thin defaults per §7.9 (`inputs.ingest_run`, empty
+      `methods`/`evaluations`, `visualize`); `configs/experiments/neighborhood_compare.yaml` per
+      §7.11 carries the paper's methods and evaluations.
+- [x] Produced the missing comparison inputs (no code change): a generic
+      `bert-base-uncased` text store (`hf_mean_pool-bert_base`), a `node2vec` graph store
+      (`node2vec-node2vec`), and `gcn`/`gat` training runs under the new `model_id` layout.
+- [x] Tests: the `min(k,|R|)` denominator (`|R|=2, k=5` → 1.0); both precision columns coincide when
+      `k ≥ |R|` and diverge when `k < |R|`; `hop_radius` on a path graph (`r=1 ⊂ r=2`, isolate excluded,
+      a node whose only neighbor is off-pool treated as isolated); one query set and one
+      `query_set_sha256` across methods when a method is missing nodes; duplicate `method_id`/
+      `evaluation_id` → `ConfigError`; unknown evaluation `kind`/relevance `provider` → `ConfigError`;
+      an experiment overlay fully replaces the default `methods` list; `gcn` and `gat` runs do not
+      clobber each other's `LATEST`; `metrics.parquet` matches `METRICS_SCHEMA`; determinism across two
+      runs. 202 new/changed tests across `test_metrics.py`, `test_relevance.py`, `test_methods.py`,
+      `test_pipeline.py`; full suite 325 passed.
+- [x] Verify: `cga run evaluate --dataset attack_cwe --experiment neighborhood_compare` on the real
+      `attack_cwe` data (4 methods: `deepwalk`, `secroberta`, `gcn`, `gat`; 3 views: `structural_r1`,
+      `structural_r2`, `textual`) writes `metrics.parquet` with 424 rows (384 neighborhood + 40
+      `cluster_quality`, matching `4 × 3 × 2 × 4` and `4 × 2 × 5`); `query_set_sha256` identical across
+      all 4 methods within each (view, role) (e.g. `graph_1`: 203 queries, `graph_2`: 933 queries);
+      `deepwalk` leads the structural views (0.93 normalized-precision@20 vs. GCN/GAT's ~0.11–0.15
+      after only 5 training epochs) and `secroberta` leads the textual view (MRR 0.64 vs. GCN/GAT's
+      ~0.45), as expected for undertrained dual-encoders; `cga inspect` lists every method plus the
+      textual reference (`method:ref:textual`) as manifest inputs, tracing back through `gcl_train` →
+      `training_data` → `embed`/`ingest` to raw file hashes; re-running produced a byte-identical
+      `metrics.parquet` (excluding the `run_id` column).

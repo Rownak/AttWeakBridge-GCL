@@ -41,6 +41,19 @@ from cga.pipelines.gcl_train.trainer import ExampleTensors, sha256_of_universe, 
 _ID_COLUMNS = ["anchor_id", "text_pos_id", "text_neg_id", "graph_pos_id", "graph_neg_id"]
 
 
+def build_model_id(model_cfg: dict[str, Any]) -> str:
+    """Return the ``model_id`` partitioning ``models/gcl/{dataset_id}/{model_id}/``.
+
+    Defaults to ``model.encoder`` (``gcn``/``gat``) so each architecture keeps
+    its own ``LATEST`` pointer -- without this, a `gat` run's ``LATEST`` write
+    silently clobbers a `gcn` run's, making it impossible for `evaluate` to
+    reference both as `latest` in one comparison (target_architecture.md §5.4).
+    An explicit ``model.model_id`` overrides the default, e.g. for two `gcn`
+    runs with different hyperparameters that should not share a lineage.
+    """
+    return model_cfg.get("model_id") or model_cfg.get("encoder", "gcn")
+
+
 class _GclTrainState:
     """Mutable state threaded across this run's steps (one instance per run)."""
 
@@ -316,6 +329,7 @@ class ManifestStep:
                 ctx.manifest.record_output(name, path)
 
         ctx.manifest.summary = {
+            "model_id": build_model_id(ctx.config["gcl_train"]["model"]),
             "training_data_run_id": state.training_data_run_id,
             "text_embedding_run_id": state.text_embedding_run_id,
             "graph_embedding_run_id": state.graph_embedding_run_id,
@@ -344,5 +358,6 @@ class GclTrainPipeline(Pipeline):
 
     def run(self, ctx: RunContext) -> None:
         super().run(ctx)
-        lineage_dir = Path(ctx.config["paths"]["models"]) / "gcl" / ctx.dataset_id
+        model_id = build_model_id(ctx.config["gcl_train"]["model"])
+        lineage_dir = Path(ctx.config["paths"]["models"]) / "gcl" / ctx.dataset_id / model_id
         write_latest(lineage_dir, ctx.run_id)

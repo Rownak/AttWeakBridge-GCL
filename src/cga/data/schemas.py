@@ -294,3 +294,55 @@ class UniverseRecord(BaseModel):
     graph_role: GraphRole
     split: NodeSplit = "train"
     held_out: bool = False
+
+
+# --- 6.10 metrics.parquet (evaluate pipeline) --------------------------------
+
+METRICS_SCHEMA = pa.schema(
+    [
+        pa.field("dataset_id", pa.string(), nullable=False),
+        pa.field("run_id", pa.string(), nullable=False),
+        pa.field("evaluation_id", pa.string(), nullable=False),
+        pa.field("evaluation_kind", pa.string(), nullable=False),
+        pa.field("method_id", pa.string(), nullable=False),
+        pa.field("method_label", pa.string(), nullable=False),
+        pa.field("method_kind", pa.string(), nullable=False),
+        pa.field("method_run_id", pa.string(), nullable=False),
+        pa.field("graph_role", pa.string(), nullable=True),
+        pa.field("view_id", pa.string(), nullable=True),
+        pa.field("param_name", pa.string(), nullable=True),
+        pa.field("param_value", pa.int32(), nullable=True),
+        pa.field("metric_name", pa.string(), nullable=False),
+        pa.field("metric_value", pa.float64(), nullable=False),
+        pa.field("n_queries", pa.int32(), nullable=True),
+    ]
+)
+
+
+class MetricRowRecord(BaseModel):
+    """One row of ``metrics.parquet``: one ``(evaluation, method, scope, sweep point, metric)``.
+
+    Long-form rather than one wide column per metric, because the evaluators
+    registered under ``evaluate`` (target_architecture.md §5.5a) have
+    different sweep axes (``k``, ``n_clusters``, none) and disjoint metric
+    sets -- a wide schema would need null-padding that grows with every new
+    evaluator. Here a new evaluator or metric adds no schema change.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    dataset_id: str
+    run_id: str
+    evaluation_id: str
+    evaluation_kind: str
+    method_id: str
+    method_label: str
+    method_kind: str
+    method_run_id: str
+    graph_role: GraphRole | None = None
+    view_id: str | None = None
+    param_name: str | None = None
+    param_value: int | None = None
+    metric_name: str
+    metric_value: float
+    n_queries: int | None = None

@@ -146,9 +146,12 @@ def _setup_training_data_run(
 
 
 def _run_gcl_train(config: dict) -> RunContext:
+    from cga.pipelines.gcl_train.pipeline import build_model_id
+
     pipeline_cls = pipelines.get("gcl_train")
     pipeline = pipeline_cls()
-    run_root = Path(config["paths"]["models"]) / "gcl" / config["dataset"]["id"]
+    model_id = build_model_id(config["gcl_train"]["model"])
+    run_root = Path(config["paths"]["models"]) / "gcl" / config["dataset"]["id"] / model_id
     ctx = RunContext.create(
         pipeline_name="gcl_train",
         pipeline_version="0.0.0-test",

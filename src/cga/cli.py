@@ -46,7 +46,9 @@ def _run_root(pipeline_name: str, config: dict[str, Any]) -> Path:
     cannot be expressed by the generic ``_PIPELINE_OUTPUT_ROOT`` lookup alone.
     ``training_data`` writes to ``artifacts/training_data/{dataset_id}`` (§5.3),
     one level under ``paths.artifacts`` rather than directly in it.
-    ``gcl_train`` writes to ``models/gcl/{dataset_id}`` (§5.4).
+    ``gcl_train`` writes to ``models/gcl/{dataset_id}/{model_id}`` (§5.4),
+    partitioned by architecture so ``gcn``/``gat`` keep separate ``LATEST``
+    pointers -- required for ``evaluate`` to compare both as ``latest``.
     ``evaluate`` writes to ``artifacts/evaluations/{dataset_id}`` (§5.5/§5.5a).
     """
     dataset_id = config["dataset"]["id"]
@@ -60,7 +62,10 @@ def _run_root(pipeline_name: str, config: dict[str, Any]) -> Path:
         return Path(config["paths"]["artifacts"]) / "training_data" / dataset_id
 
     if pipeline_name == "gcl_train":
-        return Path(config["paths"]["models"]) / "gcl" / dataset_id
+        from cga.pipelines.gcl_train.pipeline import build_model_id
+
+        model_id = build_model_id(config["gcl_train"]["model"])
+        return Path(config["paths"]["models"]) / "gcl" / dataset_id / model_id
 
     if pipeline_name == "evaluate":
         return Path(config["paths"]["artifacts"]) / "evaluations" / dataset_id

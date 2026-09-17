@@ -129,9 +129,14 @@ Non-goals: distributed execution, experiment UI, remote storage, model serving.
 │   │   │   ├── losses.py           #     triplet, jsd, infonce
 │   │   │   └── trainer.py
 │   │   └── evaluate/
-│   │       ├── pipeline.py         #   Pipeline 5
-│   │       ├── ranking.py          #     Hits@k / MRR against alignment pairs
-│   │       └── diagnostics.py      #     unsupervised checks when alignments are absent
+│   │       ├── pipeline.py         #   Pipeline 5 — loads methods, runs configured evaluators
+│   │       ├── methods.py          #     MethodSpec + load_method (embedding store | gcl run)
+│   │       ├── rows.py             #     MetricRow + long-form writer + JSON digest
+│   │       ├── metrics.py          #     set-based precision/recall/hit/MRR primitives
+│   │       └── evaluators/         #     one file per registered evaluation kind
+│   │           ├── neighborhood.py #       + relevance.py provider registry (hop_radius, cosine_top_k)
+│   │           ├── cluster_quality.py
+│   │           └── alignment_ranking.py
 │   └── py.typed
 │
 ├── scripts/
@@ -156,7 +161,7 @@ Non-goals: distributed execution, experiment UI, remote storage, model serving.
 │
 ├── models/
 │   ├── llm/{base_model_slug}/{run_id}/
-│   └── gcl/{dataset_id}/{run_id}/
+│   └── gcl/{dataset_id}/{model_id}/{run_id}/   # model_id = gcn | gat | explicit override
 │
 ├── tests/
 │   ├── unit/                       # ids, config, stores, adapters, samplers, losses
@@ -411,7 +416,7 @@ the end. **Only Pipeline 1 is dataset-aware**, and only through the adapter regi
 
 Pipelines 1–4 form the training chain; Pipeline 5 (`evaluate`) is separate because it consumes a
 finished model's exported embeddings rather than the trainer's internals. Keeping it out of
-`gcl_train` means changing `eval.ks` does not change `gcl_train`'s `config_hash` and therefore does
+`gcl_train` means changing an evaluation's `ks` does not change `gcl_train`'s `config_hash` and does
 not invalidate a completed training run — and it is what lets MLflow evaluate a registered model
 version, and DVC re-run evaluation as its own stage, without retraining.
 
@@ -549,7 +554,7 @@ Steps:
 |---|---|
 | **Inputs** | `examples.parquet` + `universe.parquet` from a `training_data` run; the two embedding stores resolved **via that run's manifest** (so they cannot be mismatched); `edges.parquet`; `alignments.parquet` when in-loop monitoring is on |
 | **Config** | encoder (`gcn`/`gat`, dims, heads), loss (`triplet`/`jsd`/`infonce`, margin, alpha), optimizer, epochs, checkpointing, optional in-loop monitoring |
-| **Outputs** → `models/gcl/{dataset_id}/{run_id}/` | `config.resolved.yaml`, `manifest.json`, `checkpoints/`, `metrics.jsonl`, `node_embeddings/` (AlignedMatrix) |
+| **Outputs** → `models/gcl/{dataset_id}/{model_id}/{run_id}/` | `config.resolved.yaml`, `manifest.json`, `checkpoints/`, `metrics.jsonl`, `node_embeddings/` (AlignedMatrix) |
 
 Steps:
 
@@ -562,58 +567,83 @@ Steps:
 3. `export` — final per-node embeddings as an `AlignedMatrix` keyed by `node_id`.
 4. `manifest`, `LATEST`.
 
+`model_id` (default `model.encoder`, i.e. `gcn`/`gat`) partitions the output root the way
+`embedder_id` partitions `embed`'s, so each architecture keeps its own `LATEST` and `evaluate` can
+reference several trained variants as `latest` in one run (§7.11).
+
 `monitor.enabled` optionally runs the same ranking code every `monitor.every` epochs and appends
 `{"epoch": …, "eval": {…}}` rows to `metrics.jsonl`, for watching a run in progress. It is a
 convenience, not the reported result: authoritative metrics come from Pipeline 5, which is the only
 thing that writes evaluation results.
 
-### 5.5 `evaluate` — alignment metrics and diagnostics
+### 5.5 `evaluate` — comparative evaluation over embedding methods
+
+Scores **several embedding methods side by side** under one or more registered evaluations. A
+*method* is any per-node `AlignedMatrix` — a baseline embedding store or a trained model's export —
+so baselines and models are compared by the same code on the same node universe.
 
 | | |
 |---|---|
-| **Inputs** | `node_embeddings/` (AlignedMatrix) from a `gcl_train` run; `nodes.parquet` for `graph_role`, `splits.parquet`, and `alignments.parquet`, all resolved **via that run's manifest chain** |
-| **Config** | `gcl_run` ref, `ks`, candidate-pool usage, diagnostic toggles |
-| **Outputs** → `artifacts/evaluations/{dataset_id}/{run_id}/` | `metrics.json`, `rankings.parquet` (optional per-pair detail), `manifest.json` |
+| **Inputs** | one `AlignedMatrix` per configured **method** (`embedding_store` or `gcl_run`); `nodes.parquet` / `edges.parquet` / `splits.parquet` / `alignments.parquet` from an `ingest` run; any reference store an evaluation declares |
+| **Config** | `inputs.ingest_run`, `methods[]`, `evaluations[]` (each `{evaluation_id, kind, params}`), `visualize` |
+| **Outputs** → `artifacts/evaluations/{dataset_id}/{run_id}/` | `metrics.parquet` (long-form rows, §6.10), `metrics.json` (digest derived from those rows), `plots/`, `manifest.json` |
 
 Steps:
 
-1. `load` — resolve the `gcl_train` run, read its manifest, follow `inputs[]` back to the `ingest`
-   run that produced `nodes.parquet` / `splits.parquet` / `alignments.parquet`, and load the exported
-   embeddings. Nothing is passed in by hand, so an evaluation cannot be run against mismatched sources.
-2. `rank` — with alignments present, score each test pair (§8.4); skipped when there are none.
-3. `diagnose` — unsupervised checks (§8.4), always run; reported over all nodes and over the
-   `test` split separately.
-4. `validate_and_manifest`.
+1. `load` — validate config (duplicate ids, unknown kinds, empty sweeps); resolve `ingest_run`; read
+   the canonical tables and build the graph; `load_method` every method and every
+   evaluation-declared reference. All compute-blocking errors surface here.
+2. `evaluate` — for each entry in `evaluations[]`: look the `kind` up in the evaluator registry, call
+   it, collect its `MetricRow`s. The pipeline's only loop; it knows no evaluation kind.
+3. `visualize` — optional t-SNE/UMAP per method → `plots/tsne_{method_id}.png`. Returns no value, so
+   it can never be mistaken for a metric.
+4. `validate_and_manifest` — write `metrics.parquet` and the derived `metrics.json`, log the pivot,
+   `LATEST`.
 
-Because it reads only the exported `AlignedMatrix`, this pipeline evaluates any saved model — an
-older run, a checkpoint re-export, or eventually a model pulled from an MLflow registry — without
+Each method and reference resolves through `ctx.resolve` and lands in `manifest.inputs[]` as
+`method:<id>` / `reference:<view_id>`, and every metric row carries its `method_run_id` — so lineage
+is per-method rather than following one training chain (with N methods there is no canonical chain,
+and a generic-text reference appears in none of them).
+
+Because it reads only exported `AlignedMatrix` stores, this pipeline evaluates any saved model — an
+older run, a checkpoint re-export, or eventually one pulled from an MLflow registry — without
 touching `gcl_train`.
 
-**Deferred (post-paper).** The paper does not use alignment-pair metrics — `attack_cwe` has no
-alignments to rank against — so this pipeline as specified above is not implemented in Sprint 1.
-What ships instead, in the same `evaluate` slot, is §5.5a below.
+### 5.5a Evaluators
 
-### 5.5a `evaluate` (paper scope) — neighborhood-preservation metrics
+An **evaluator** is one registered evaluation method that owns its own loop and returns `MetricRow`s
+(§6.10). Its `params` block is opaque to the pipeline — handed verbatim to the evaluator, validated
+by the evaluator's own pydantic model. This is what makes a new evaluation a new file (§10a).
 
-Answers a narrower question than §5.5: does the learned embedding preserve neighborhoods that
-already exist in the text-similarity and graph/structural-similarity spaces? This is a
-quantitative rewrite of the legacy `gcl_analysis/2_precision@k_text_graph.py` notebook script, not
-an alignment-ranking evaluation.
+| `kind` | Loop | Ground truth | Metrics |
+|---|---|---|---|
+| `neighborhood` | methods × views × `graph_role` × `k` | derived per view | normalized precision@k, recall@k, Hit@k, MRR |
+| `cluster_quality` | methods × `graph_role` × `n_clusters` | none | silhouette |
+| `alignment_ranking` | test alignment pairs × `k` | `alignments.parquet` | Hits@k, MRR |
 
-- **Two reference views**, scored independently: **text** (reference = cosine top-k over text
-  embeddings) and **structural** (reference = cosine top-k over DeepWalk/node2vec embeddings, or
-  shortest-path similarity). Comparisons are restricted to same-`graph_role` pairs.
-- **Retrieval direction** is always learned embedding → reference top-k: for each node, does the
-  learned space's neighborhood agree with the neighborhood the reference already defines? Never the
-  reverse.
-- **Relevance label**: node `j` is relevant to query `i` iff `j ∈ reference_top_k(i)`, per view.
-- **Metrics**, per view and per `k`: **Precision@k** (overlap fraction between learned and
-  reference top-k), **Hit@k** (whether the reference's nearest neighbor lands in the learned top-k),
-  **MRR** (mean reciprocal rank of the reference's nearest neighbor in the learned ranking).
-- **t-SNE plots** (ported from `gcl_analysis/1_tsne_plot.py`) are optional embedding visualization
-  only — never used as a metric. The legacy `3_top_pairs_text_graph.py` analysis is not ported.
+**`neighborhood`** asks *does the learned space preserve neighborhoods that already exist* (where
+`alignment_ranking` asks *does it find the right cross-graph partner*). It is the only evaluation
+available for a dataset with no ground truth (`attack_cwe` today).
 
-See `dev_docs/sprints/sprint_1.md` Phase 1.8 for the task breakdown.
+- **Retrieval direction** is always method embedding → reference relevant set. The ranking comes from
+  the method; the relevant set comes from the view. Never the reverse.
+- **Views** are registered *relevance providers* returning a relevance **set** per query, so all four
+  metrics are pure set operations:
+  - `hop_radius` — relevant = all nodes within radius `r` by shortest path. A set rather than a
+    top-k because hop distance is integer-valued and massively tied, which would otherwise make
+    relevance an artifact of the tie-break. Computed on the fly with a radius-bounded BFS; isolates
+    have an empty set and drop out of that view with no isolate-specific code.
+  - `cosine_top_k` — relevant = top-k by cosine over a declared reference embedding store (e.g. a
+    generic `bert-base-uncased` store, contrasting with a domain text method).
+- **Metrics** per (method, view, role, k): **normalized precision@k** `|L_k ∩ R| / min(k,|R|)`,
+  **recall@k** `|L_k ∩ R| / |R|` (both emitted, so neither is mislabeled when `k > |R|`), **Hit@k**
+  (any relevant in the top-k), **MRR** (reciprocal rank of the first relevant).
+- **Eligibility**, per (view, role): candidates = role ids ∩ the node ids **every** method can score;
+  the provider is prepared on that pool; queries = candidates where the view has a non-empty set.
+  Intersecting the *candidate pool* — not just the query set — is what keeps precision comparable
+  across methods, which would otherwise be pool-size sensitive. Comparisons stay within one
+  `graph_role` unless a provider declares otherwise (alignment relevance is cross-role).
+- `query_set_sha256` per (evaluation, view, role) records that the methods really shared a query set.
 
 ---
 
@@ -723,6 +753,37 @@ Authoritative metrics live in the `evaluate` run's `metrics.json`, not here.
 `universe_sha256`, `n_nodes`, `n_examples`, `final_loss`. Evaluation metrics live in the `evaluate`
 run that references this model, not here. Checkpoints embed
 `universe_sha256` so a checkpoint refuses to load against a different node ordering.
+
+### 6.10 `metrics.parquet`
+
+Long-form: **one row per (evaluation, method, scope, sweep point, metric)**.
+
+| Field | Type | Notes |
+|---|---|---|
+| `dataset_id`, `run_id` | string | the `evaluate` run |
+| `evaluation_id` | string | config-supplied instance name; unique per run |
+| `evaluation_kind` | string | registry key (`neighborhood`, `cluster_quality`, …) |
+| `method_id`, `method_label`, `method_kind` | string | as configured |
+| `method_run_id` | string | resolved upstream run — per-row lineage |
+| `graph_role` | string \| null | null when an evaluation is cross-role |
+| `view_id` | string \| null | null when an evaluation has no views |
+| `param_name` | string \| null | the sweep axis name (`k`, `n_clusters`) |
+| `param_value` | int32 \| null | its value |
+| `metric_name` | string | `normalized_precision_at_k`, `recall_at_k`, `hit_at_k`, `mrr`, `silhouette`, … |
+| `metric_value` | float64 | |
+| `n_queries` | int32 \| null | population the value was averaged over |
+
+Long form over a wide table because the evaluations in §5.5a have different sweep axes and disjoint
+metric sets: a wide schema would need null-padding that grows with every evaluation, or one file per
+evaluator and no single table to pivot. Here **a new evaluation or metric adds no schema change** —
+the property that makes §10a true. Pivoting is one call
+(`pivot_table(index="param_value", columns="method_label", values="metric_value")` after filtering
+`evaluation_id` and `metric_name`).
+
+`metrics.json` is a nested digest (`evaluation → view → role → method → param`) **derived from these
+rows** — never computed separately, so the two cannot drift — plus per-(evaluation, scope)
+provenance: `query_set_sha256`, `n_excluded_undefined`, `mean_relevant_set_size`. Parquet is the
+machine contract; JSON is for reading and `cga inspect`.
 
 ---
 
@@ -946,20 +1007,16 @@ gcl_train:
 
 ### 7.9 `configs/pipelines/evaluate.yaml`
 
+Thin defaults only; a named evaluation is an `configs/experiments/` overlay (§7.11), since lists
+replace on merge (§7.1) and so an overlay's `methods`/`evaluations` fully replace these.
+
 ```yaml
 evaluate:
   inputs:
-    gcl_run: latest                 # nodes/alignments resolved from its manifest chain
-  ranking:
-    enabled: true                   # no-ops when the dataset has no alignments
-    ks: [1, 5, 10]
-    use_candidate_pool: true        # rank within test.cands.tsv when the dataset supplies it
-    also_full_target_set: true      # and over every graph_2 node
-  diagnostics:
-    silhouette: true                # over graph_role
-    similarity_distribution: true
-    neighbor_samples: 50            # nearest cross-graph neighbours dumped for inspection
-  write_rankings: false             # per-pair detail to rankings.parquet
+    ingest_run: latest              # canonical tables + graph
+  methods: []                       # [{method_id, label, kind, embedder_id|model_id, ref}]
+  evaluations: []                   # [{evaluation_id, kind, params}] — params opaque to the pipeline
+  visualize: {enabled: false, perplexity: 25.0, methods: []}
 ```
 
 ### 7.10 `configs/experiments/attack_cwe_secroberta_gcn.yaml`
@@ -973,9 +1030,39 @@ training_data:
 gcl_train:
   model: {encoder: gcn}
   loss:  {name: triplet, margin: 1.0, alpha: 0.5}
-evaluate:
-  ranking: {ks: [1, 5, 10]}
 ```
+
+### 7.11 `configs/experiments/neighborhood_compare.yaml` — a named evaluation
+
+Named evaluations are experiment overlays, not new pipeline files: the CLI resolves
+`configs/pipelines/{pipeline}.yaml` by pipeline name, and `--experiment` already layers on top.
+
+```yaml
+evaluate:
+  methods:
+    - {method_id: deepwalk,   label: "DeepWalk",         kind: embedding_store, embedder_id: deepwalk-deepwalk,          ref: latest}
+    - {method_id: secroberta, label: "SecRoBERTa",       kind: embedding_store, embedder_id: hf_mean_pool-pt_SecRoBERTa, ref: latest}
+    - {method_id: gcn,        label: "Dual-encoder GCN", kind: gcl_run,         model_id: gcn,                           ref: latest}
+    - {method_id: gat,        label: "Dual-encoder GAT", kind: gcl_run,         model_id: gat,                           ref: latest}
+  evaluations:
+    - evaluation_id: neigh
+      kind: neighborhood
+      params:
+        ks: [1, 5, 10, 20]
+        roles: [graph_1, graph_2]
+        views:
+          - {view_id: structural_r1, provider: hop_radius, params: {radius: 1}}
+          - {view_id: structural_r2, provider: hop_radius, params: {radius: 2}}
+          - {view_id: textual, provider: cosine_top_k,
+             params: {top_k: 10, reference: {kind: embedding_store, embedder_id: hf_mean_pool-bert_base, ref: latest}}}
+    - evaluation_id: clusters
+      kind: cluster_quality
+      params: {roles: [graph_1, graph_2], n_clusters: [2, 4, 8, 16, 32]}
+  visualize: {enabled: true, methods: [gcn, gat]}
+```
+
+`evaluations` is a list of **instances**, not a map keyed by kind, so the same kind may appear more
+than once with different params (a `top_k` sensitivity check) distinguished by `evaluation_id`.
 
 ---
 
@@ -1015,23 +1102,20 @@ pipeline cannot read an artifact it failed to declare.
 
 ### 8.4 Evaluation
 
-Pipeline 5 (§5.5), entirely generic — it reads an exported `AlignedMatrix`, `nodes.parquet` for
-`graph_role`, `splits.parquet` for the node partition, and `alignments.parquet`, and knows nothing
-about any dataset:
+Pipeline 5 (§5.5) is entirely generic: it reads exported `AlignedMatrix` stores plus the canonical
+tables, and knows neither dataset nor evaluation kind. Which evaluations run is **configuration**
+(§7.11), not a runtime branch — a dataset without ground truth simply does not list
+`alignment_ranking`, rather than the pipeline testing for empty alignments.
 
-- **With alignments** (`ncit_doid`): for each test pair, rank `graph_2` candidates by cosine
-  similarity to the `graph_1` node — over the full `graph_2` node set, and over the supplied
-  candidate pool when present. Reports Hits@k and MRR. Uses `alignments.parquet` only; knows nothing
-  about ontologies.
-- **Without alignments** (`attack_cwe` today): unsupervised diagnostics only — silhouette score over
-  `graph_role`, cross-graph similarity distribution, nearest-cross-graph-neighbor samples dumped for
-  manual inspection.
+Three evaluators (§5.5a) cover current needs: `neighborhood` (label-free, the only one available for
+`attack_cwe`), `cluster_quality` (silhouette over `graph_role`), and `alignment_ranking` (Hits@k /
+MRR over `ncit_doid`'s test pairs, within the full `graph_2` set and the supplied candidate pool).
 
-Diagnostics are reported **both** over all nodes and restricted to the `test` split, so a dataset
-with no alignment ground truth still gets a number computed on nodes the contrastive objective
-never saw (§5.1.1). Both write `artifacts/evaluations/{dataset_id}/{run_id}/metrics.json`; the
-ranking block is absent when `alignments.parquet` is empty. `gcl_train.monitor` may run the same
-ranking code in-loop for progress visibility, but only this pipeline writes the reported numbers.
+Evaluations that depend on the node partition report **both** over all nodes and restricted to the
+`test` split, so a dataset with no alignment ground truth still gets a number computed on nodes the
+contrastive objective never saw (§5.1.1) — carried as a `graph_role`-style scope on the metric rows.
+`gcl_train.monitor` may run ranking code in-loop for progress visibility, but only this pipeline
+writes reported numbers.
 
 ### 8.5 Logging, reproducibility, error handling
 
@@ -1050,8 +1134,10 @@ ranking code in-loop for progress visibility, but only this pipeline writes the 
   `AlignedMatrix.select` (missing id, reorder); `EmbeddingStore` resume semantics (failed row
   re-runs, `ok` row untouched); each sampler on a toy matrix; each loss against hand-computed
   values; **each adapter against a handful of committed source snippets** (a few STIX objects, a few
-  `owl:Class` blocks, a few TSV rows) asserting the canonical records they produce; Hits@k / MRR on a
-  toy ranking and the zero-alignment no-op path.
+  `owl:Class` blocks, a few TSV rows) asserting the canonical records they produce; each metric
+  primitive against hand-computed values (including the `min(k,|R|)` denominator); each relevance
+  provider on a toy graph; each evaluator's rows on toy methods; and that all methods share one query
+  set when one method is missing nodes.
 - `tests/integration/` — each pipeline end-to-end on `attack_cwe` with `epochs: 2`, asserting
   manifests, schemas, shapes, and referential integrity.
 
@@ -1089,18 +1175,23 @@ data/raw/{dataset_id}/…            (attack.json + cwec.xml  |  ncit.owl + doid
                               │
                               ▼
                      cga run gcl_train
-                models/gcl/{ds}/{run}/
+                models/gcl/{ds}/{model_id}/{run}/
                   config.resolved.yaml, manifest.json
                   checkpoints/, metrics.jsonl
                   node_embeddings/{vectors.npy, index.parquet}   ← research output
                               │
-                              ▼
-                     cga run evaluate
+        ┌─────────────────────┴──── + embedding stores (baselines) ────┐
+        ▼                                                             ▼
+                     cga run evaluate --experiment <named evaluation>
             artifacts/evaluations/{ds}/{run}/
-              metrics.json        ← Hits@k / MRR, or unsupervised diagnostics
-              rankings.parquet    ← optional per-pair detail
-              manifest.json       ← records the gcl_train run it scored
+              metrics.parquet     ← long-form rows: (evaluation, method, scope, k, metric)
+              metrics.json        ← digest derived from those rows
+              plots/              ← optional t-SNE, never a metric
+              manifest.json       ← records every method + reference run it scored
 ```
+
+`evaluate` takes **several** methods — each baseline embedding store and each trained model — so the
+comparison is one run over a shared node universe rather than several runs stitched together.
 
 Identity flows as `node_id` strings through every arrow. Positions are computed exactly once, in
 `training_data.build_universe`, written down (`universe.parquet`), and re-validated by
@@ -1117,7 +1208,18 @@ Identity flows as `node_id` strings through every arrow. Positions are computed 
 4. Add a unit test asserting the adapter's canonical output on committed source snippets.
 5. Run `cga run ingest --dataset <name>`, then the remaining four pipelines unchanged.
 
-No change to `cga/core/`, `cga/data/`, or any of the five pipelines.
+No change to `cga/core/`, `cga/data/`, or any of the five pipelines. `evaluate` needs no change
+either — list the dataset's applicable evaluations in an overlay (§7.11).
+
+## 10a. Adding an evaluation, metric, or baseline
+
+| Task | Change |
+|---|---|
+| New baseline or model as a comparison method | one line in `methods:` — zero code (a `gcl_run` needs its `model_id`) |
+| New metric inside an existing evaluator | emit `MetricRow`s with a new `metric_name` — zero schema, zero config change |
+| New view for `neighborhood` | one relevance provider + `@relevance_providers.register(...)` |
+| New evaluation method | one file in `pipelines/evaluate/evaluators/`, `@evaluators.register(...)`, one pydantic params model, one test — zero change to `pipeline.py`, schemas, or the CLI |
+| New named evaluation | one file in `configs/experiments/` — zero code |
 
 ---
 
@@ -1146,7 +1248,13 @@ Deliberately excluded from the initial implementation; none require architectura
 - **Ontology pruning** — `pruning.mode: alignment_reachable` for `ncit_doid` if full-size ingestion
   proves too slow.
 - **Hop-distance features** — the legacy `text_hop` feature and its similarity matrices; no live
-  consumer exists.
+  consumer exists. Radius-bounded distances for the `neighborhood` evaluator are computed on the fly
+  (§5.5a); a precomputed artifact would only be needed for unbounded distances, and would be keyed
+  to one node universe.
+- **Per-pair ranking detail** — `rankings.parquet`, ≈290k re-derivable rows with no current
+  consumer; an `alignment_ranking` option if ever needed.
+- **Non-integer sweep axes** in `metrics.parquet` — `param_value` is `int32` (covers `k`,
+  `n_clusters`); a float axis would add a second typed column.
 - **Artifact GC** — `cga gc --keep-latest N --keep-referenced`, once disk pressure appears.
 - **Early stopping / LR scheduling** in `gcl_train`.
 - **Structured JSON logs**, source-data download helper, richer similarity-report plots.
