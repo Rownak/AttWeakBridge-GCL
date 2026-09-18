@@ -50,6 +50,38 @@ _HELD_OUT_ALIGNMENT_SPLITS = frozenset({"test"})
 
 _ID_COLUMNS = ["anchor_id", "text_pos_id", "text_neg_id", "graph_pos_id", "graph_neg_id"]
 
+# Key params included in the default sampler_id per sampler name, in the order
+# they appear in the id -- keeps rank_topk.k and percentile.{top_pct,bottom_pct}
+# sweep points from clobbering each other's LATEST (mirrors build_model_id).
+_SAMPLER_ID_PARAMS = {
+    "rank_topk": ("k",),
+    "percentile": ("top_pct", "bottom_pct"),
+}
+
+
+def build_sampler_id(sampler_cfg: dict[str, Any]) -> str:
+    """Return the ``sampler_id`` partitioning ``training_data/{dataset_id}/{sampler_id}/``.
+
+    Defaults to ``{sampler.name}-{key params}`` (e.g. ``rank_topk-k30`` or
+    ``percentile-top0.04-bottom0.04``) so distinct sweep points over the same
+    sampler keep separate ``LATEST`` pointers -- without this, a second
+    ``rank_topk`` run with a different ``k`` would silently clobber the
+    first's ``LATEST``, making it impossible for a sweep to compare multiple
+    points of the same sampler as ``latest``. An explicit
+    ``training_data.sampler.sampler_id`` overrides the default, mirroring
+    ``gcl_train.model.model_id``.
+    """
+    explicit = sampler_cfg.get("sampler_id")
+    if explicit:
+        return explicit
+
+    name = sampler_cfg.get("name", "rank_topk")
+    parts = [name]
+    for param in _SAMPLER_ID_PARAMS.get(name, ()):
+        if param in sampler_cfg:
+            parts.append(f"{param}{sampler_cfg[param]}")
+    return "-".join(parts)
+
 
 class _TrainingDataState:
     """Mutable state threaded across this run's steps (one instance per run)."""
@@ -360,5 +392,6 @@ class TrainingDataPipeline(Pipeline):
 
     def run(self, ctx: RunContext) -> None:
         super().run(ctx)
-        lineage_dir = Path(ctx.config["paths"]["artifacts"]) / "training_data" / ctx.dataset_id
+        sampler_id = build_sampler_id(ctx.config["training_data"]["sampler"])
+        lineage_dir = Path(ctx.config["paths"]["artifacts"]) / "training_data" / ctx.dataset_id / sampler_id
         write_latest(lineage_dir, ctx.run_id)

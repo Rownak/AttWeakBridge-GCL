@@ -18,6 +18,7 @@ from cga.data.aligned import AlignedMatrix
 from cga.data.aligned import NodeUniverse
 from cga.data.example_store import read_examples
 from cga.data.schemas import ALIGNMENTS_SCHEMA, NODES_SCHEMA, SPLITS_SCHEMA
+from cga.pipelines.training_data.pipeline import build_sampler_id
 
 G1_IDS = ["ncit:1", "ncit:2", "ncit:3", "ncit:4"]
 G2_IDS = ["doid:1", "doid:2", "doid:3", "doid:4"]
@@ -125,9 +126,12 @@ def _build_config(tmp_path: Path, *, sampler_name: str = "rank_topk", sampler_ex
 
 
 def _run_training_data(config: dict, tmp_path: Path) -> RunContext:
+    from cga.pipelines.training_data.pipeline import build_sampler_id
+
     pipeline_cls = pipelines.get("training_data")
     pipeline = pipeline_cls()
-    run_root = Path(config["paths"]["artifacts"]) / "training_data" / config["dataset"]["id"]
+    sampler_id = build_sampler_id(config["training_data"]["sampler"])
+    run_root = Path(config["paths"]["artifacts"]) / "training_data" / config["dataset"]["id"] / sampler_id
     ctx = RunContext.create(
         pipeline_name="training_data",
         pipeline_version="0.0.0-test",
@@ -322,12 +326,43 @@ def test_supervised_sampler_excludes_pairs_with_a_val_split_endpoint(tmp_path):
     assert examples.num_rows == 0
 
 
+def test_build_sampler_id_rank_topk_includes_k():
+    assert build_sampler_id({"name": "rank_topk", "k": 30}) == "rank_topk-k30"
+
+
+def test_build_sampler_id_percentile_includes_both_pcts():
+    assert (
+        build_sampler_id({"name": "percentile", "top_pct": 0.04, "bottom_pct": 0.08})
+        == "percentile-top_pct0.04-bottom_pct0.08"
+    )
+
+
+def test_build_sampler_id_respects_explicit_override():
+    assert build_sampler_id({"name": "rank_topk", "k": 30, "sampler_id": "custom"}) == "custom"
+
+
 def test_training_data_pipeline_writes_latest(tmp_path):
     config = _build_config(tmp_path)
     _setup_stores(config, tmp_path, alignment_rows=[])
 
     ctx = _run_training_data(config, tmp_path)
 
-    lineage_dir = Path(config["paths"]["artifacts"]) / "training_data" / "ncit_doid"
+    lineage_dir = Path(config["paths"]["artifacts"]) / "training_data" / "ncit_doid" / "rank_topk-k2"
     latest_run_id = (lineage_dir / "LATEST").read_text(encoding="utf-8").strip()
     assert latest_run_id == ctx.run_id
+
+
+def test_training_data_pipeline_partitions_latest_by_sampler_id(tmp_path):
+    # Two different k values for the same sampler must keep separate LATEST
+    # pointers -- otherwise a sweep over rank_topk.k would have its later
+    # points silently clobber earlier ones.
+    config_k2 = _build_config(tmp_path, sampler_extra={"k": 2})
+    _setup_stores(config_k2, tmp_path, alignment_rows=[])
+    ctx_k2 = _run_training_data(config_k2, tmp_path)
+
+    config_k3 = _build_config(tmp_path, sampler_extra={"k": 3})
+    ctx_k3 = _run_training_data(config_k3, tmp_path)
+
+    lineage_root = Path(config_k2["paths"]["artifacts"]) / "training_data" / "ncit_doid"
+    assert (lineage_root / "rank_topk-k2" / "LATEST").read_text(encoding="utf-8").strip() == ctx_k2.run_id
+    assert (lineage_root / "rank_topk-k3" / "LATEST").read_text(encoding="utf-8").strip() == ctx_k3.run_id

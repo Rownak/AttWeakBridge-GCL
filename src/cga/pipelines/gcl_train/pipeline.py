@@ -91,7 +91,10 @@ class LoadStep:
         state = self._state
         cfg = ctx.config["gcl_train"]
 
-        training_data_lineage = Path(ctx.config["paths"]["artifacts"]) / "training_data" / ctx.dataset_id
+        sampler_id = cfg["inputs"]["training_data_sampler_id"]
+        training_data_lineage = (
+            Path(ctx.config["paths"]["artifacts"]) / "training_data" / ctx.dataset_id / sampler_id
+        )
         training_data_ref = ArtifactRef(
             lineage_dir=training_data_lineage, ref=cfg["inputs"]["training_data_run"]
         )

@@ -85,7 +85,7 @@ def _build_config(tmp_path: Path, *, epochs: int = 2) -> dict:
         "run": {"name": None},
         "dataset": {"id": "attack_cwe"},
         "gcl_train": {
-            "inputs": {"training_data_run": "latest"},
+            "inputs": {"training_data_run": "latest", "training_data_sampler_id": "rank_topk-k30"},
             "model": {"encoder": "gcn", "hidden_dim": 8, "out_dim": 8, "gat_heads": [2, 1], "dropout": 0.0},
             "loss": {"name": "triplet", "margin": 1.0, "alpha": 0.5, "temperature": 0.1},
             "optim": {"name": "adam", "lr": 1.0e-3, "weight_decay": 0.0},
@@ -112,7 +112,9 @@ def _setup_training_data_run(
     graph_dir = Path(config["paths"]["artifacts"]) / "embeddings" / dataset_id / "deepwalk-fake" / "run-graph"
     graph_run_id = _write_embedding_store(graph_dir, node_ids, dim=4, seed=2)
 
-    training_data_dir = Path(config["paths"]["artifacts"]) / "training_data" / dataset_id / "run-td"
+    training_data_dir = (
+        Path(config["paths"]["artifacts"]) / "training_data" / dataset_id / "rank_topk-k30" / "run-td"
+    )
     training_data_dir.mkdir(parents=True, exist_ok=True)
 
     universe = NodeUniverse(

@@ -146,3 +146,38 @@ def test_build_parser_requires_a_subcommand():
     parser = build_parser()
     with pytest.raises(SystemExit):
         parser.parse_args([])
+
+
+def test_sweep_runs_every_combination_and_partitions_latest(cli_project, capsys):
+    spec_path = cli_project / "sweep_seed.yaml"
+    spec_path.write_text(
+        "pipeline: ingest\ndataset: attack_cwe\nsweep:\n  seed: [1, 2]\n", encoding="utf-8"
+    )
+
+    exit_code = main(["sweep", "--spec", str(spec_path)])
+    assert exit_code == 0
+    out = capsys.readouterr().out
+    assert "2/2 combinations succeeded" in out
+
+    lineage_dir = cli_project / "data" / "processed" / "attack_cwe"
+    latest_run_id = (lineage_dir / "LATEST").read_text(encoding="utf-8").strip()
+    manifest = (lineage_dir / latest_run_id / "manifest.json").read_text(encoding="utf-8")
+    assert '"sweep_point_id"' in manifest
+    assert '"seed2"' in manifest
+
+
+def test_sweep_continues_past_a_failed_combination(cli_project, capsys):
+    spec_path = cli_project / "sweep_bad.yaml"
+    spec_path.write_text(
+        "pipeline: ingest\ndataset: attack_cwe\nsweep:\n"
+        "  dataset.adapter: [attack_cwe, no_such_adapter]\n",
+        encoding="utf-8",
+    )
+
+    exit_code = main(["sweep", "--spec", str(spec_path)])
+    assert exit_code == 1
+    out = capsys.readouterr().out
+    assert "1/2 combinations succeeded" in out
+
+    lineage_dir = cli_project / "data" / "processed" / "attack_cwe"
+    assert (lineage_dir / "LATEST").is_file()  # the successful point still wrote LATEST

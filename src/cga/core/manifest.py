@@ -46,6 +46,11 @@ class Manifest:
         run_id: This run's generated id.
         dataset_id: Dataset pair this run operates on.
         seed: RNG seed used for the run.
+        sweep_point_id: Set by ``cga sweep`` before a pipeline's own steps
+            run, so it survives even though every pipeline's manifest step
+            assigns ``summary`` wholesale (a dedicated field, not a
+            ``summary`` key, avoids that collision). ``None`` for a plain
+            ``cga run`` invocation.
     """
 
     pipeline: str
@@ -63,6 +68,7 @@ class Manifest:
     inputs: list[dict[str, Any]] = field(default_factory=list)
     outputs: list[dict[str, Any]] = field(default_factory=list)
     summary: dict[str, Any] = field(default_factory=dict)
+    sweep_point_id: str | None = None
 
     def __post_init__(self) -> None:
         self.env.setdefault("python", platform.python_version())
@@ -139,6 +145,7 @@ class Manifest:
             "inputs": self.inputs,
             "outputs": self.outputs,
             "summary": self.summary,
+            "sweep_point_id": self.sweep_point_id,
         }
 
     def write(self, run_dir: str | Path) -> Path:

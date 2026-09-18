@@ -1,0 +1,11 @@
+# dev_docs/sweep_experiment_plan.md §1 -- rank_topk.k sweep, attack_cwe.
+# Run as: uv run cga sweep --spec configs/sweeps/rank_topk_k.yaml
+#
+# training_data.sampler.name is fixed at rank_topk (not swept alongside
+# percentile -- the model trains on one sampler at a time, never both; see
+# dev_docs/sprints/sprint_2.md Phase 2.1's clarification note).
+pipeline: training_data
+dataset: attack_cwe
+sweep:
+  training_data.sampler.name: [rank_topk]
+  training_data.sampler.k: [5, 10, 20, 30]

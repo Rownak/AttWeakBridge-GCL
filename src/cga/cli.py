@@ -4,6 +4,7 @@
 cga list [pipelines|adapters|embedders|samplers]
 cga run <pipeline> --dataset <id> [--experiment <name>] [--config f.yaml ...]
                    [--set key.path=value ...] [--run-name NAME] [--resume RUN_ID] [--dry-run]
+cga sweep --spec <sweep_spec.yaml>
 cga validate <artifact_dir>
 cga inspect  <artifact_dir>
 cga config show <pipeline> [...same layering flags]
@@ -44,8 +45,11 @@ def _run_root(pipeline_name: str, config: dict[str, Any]) -> Path:
     one further level under the run's ``embedder_id`` (target_architecture.md
     §5.2), which depends on the resolved ``embed.embedder`` config block, so it
     cannot be expressed by the generic ``_PIPELINE_OUTPUT_ROOT`` lookup alone.
-    ``training_data`` writes to ``artifacts/training_data/{dataset_id}`` (§5.3),
-    one level under ``paths.artifacts`` rather than directly in it.
+    ``training_data`` writes to
+    ``artifacts/training_data/{dataset_id}/{sampler_id}`` (§5.3), partitioned
+    by sampler configuration so a sweep over e.g. ``rank_topk.k`` keeps each
+    value's ``LATEST`` pointer separate (mirrors ``gcl_train``'s
+    ``model_id`` partitioning below).
     ``gcl_train`` writes to ``models/gcl/{dataset_id}/{model_id}`` (§5.4),
     partitioned by architecture so ``gcn``/``gat`` keep separate ``LATEST``
     pointers -- required for ``evaluate`` to compare both as ``latest``.
@@ -60,7 +64,10 @@ def _run_root(pipeline_name: str, config: dict[str, Any]) -> Path:
         return Path(config["paths"]["artifacts"]) / "embeddings" / dataset_id / embedder_id
 
     if pipeline_name == "training_data":
-        return Path(config["paths"]["artifacts"]) / "training_data" / dataset_id
+        from cga.pipelines.training_data.pipeline import build_sampler_id
+
+        sampler_id = build_sampler_id(config["training_data"]["sampler"])
+        return Path(config["paths"]["artifacts"]) / "training_data" / dataset_id / sampler_id
 
     if pipeline_name == "gcl_train":
         from cga.pipelines.gcl_train.pipeline import build_model_id
@@ -144,6 +151,41 @@ def cmd_list(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_pipeline(pipeline_name: str, config: dict[str, Any], *, sweep_point_id: str | None = None) -> RunContext:
+    """Build a ``RunContext`` and run ``pipeline_name`` against ``config``.
+
+    Shared by ``cga run`` and ``cga sweep`` so a swept combination goes
+    through exactly the same ``build_config -> RunContext.create ->
+    pipeline.run`` path as a standalone run (plan §2: "no change to
+    ``core/config.py``"). ``sweep_point_id`` is stored on
+    ``Manifest.sweep_point_id`` (a dedicated field, not a ``summary`` key)
+    since every pipeline's manifest step assigns ``ctx.manifest.summary =
+    {...}`` wholesale -- a plain dict key set here would be silently
+    discarded.
+
+    Raises:
+        CgaError: Propagated from ``pipeline.run`` on failure; the caller
+            decides whether that aborts (``cga run``) or is merely logged and
+            skipped (``cga sweep``).
+    """
+    pipeline_cls = pipelines.get(pipeline_name)
+    pipeline = pipeline_cls()
+    run_root = _run_root(pipeline_name, config)
+
+    ctx = RunContext.create(
+        pipeline_name=pipeline_name,
+        pipeline_version=__version__,
+        dataset_id=config["dataset"]["id"],
+        config=config,
+        run_root=run_root,
+    )
+    if sweep_point_id is not None:
+        ctx.manifest.sweep_point_id = sweep_point_id
+
+    pipeline.run(ctx)
+    return ctx
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     """``cga run <pipeline> --dataset <id> ...``."""
     pipeline_name = args.pipeline
@@ -154,27 +196,58 @@ def cmd_run(args: argparse.Namespace) -> int:
         print(f"Resolved config keys: {sorted(config.keys())}")
         return 0
 
-    pipeline_cls = pipelines.get(pipeline_name)
-    pipeline = pipeline_cls()
-
-    run_root = _run_root(pipeline_name, config)
-
-    ctx = RunContext.create(
-        pipeline_name=pipeline_name,
-        pipeline_version=__version__,
-        dataset_id=config["dataset"]["id"],
-        config=config,
-        run_root=run_root,
-    )
-
     try:
-        pipeline.run(ctx)
+        ctx = _run_pipeline(pipeline_name, config)
     except CgaError as exc:
-        ctx.logger.error("Pipeline '%s' failed: %s", pipeline_name, exc)
+        print(f"Pipeline '{pipeline_name}' failed: {exc}", file=sys.stderr)
         return 1
 
     print(f"Run '{ctx.run_id}' succeeded: {ctx.run_dir}")
     return 0
+
+
+def cmd_sweep(args: argparse.Namespace) -> int:
+    """``cga sweep --spec <file>``: expand a sweep spec and run each combination.
+
+    Builds each combination's config the normal ``--dataset``/pipeline-config
+    layering way, then applies that combination's overrides last (same
+    precedence ``--set`` would have). A combination that raises ``CgaError``
+    is logged and skipped rather than aborting the whole sweep, per the plan's
+    "continue past a failed combination" requirement -- the sweep's own exit
+    code is non-zero if *any* combination failed, so CI still notices.
+    """
+    from cga.core.sweep import SweepSpec, expand_sweep
+
+    spec = SweepSpec.from_file(args.spec)
+    points = expand_sweep(spec)
+
+    pipeline_path = _pipeline_config_path(spec.pipeline)
+    dataset_path = _dataset_config_path(spec.dataset)
+    if not pipeline_path.is_file():
+        raise CgaError(f"Unknown pipeline '{spec.pipeline}': no such file {pipeline_path}")
+    if not dataset_path.is_file():
+        raise CgaError(f"Unknown dataset '{spec.dataset}': no such file {dataset_path}")
+
+    n_failed = 0
+    for point in points:
+        config = build_config(
+            base_path=_CONFIG_ROOT / "base.yaml",
+            dataset_path=dataset_path,
+            pipeline_path=pipeline_path,
+            overrides=point.overrides,
+        )
+        print(f"[sweep] running point '{point.sweep_point_id}' ({point.overrides})")
+        try:
+            ctx = _run_pipeline(spec.pipeline, config, sweep_point_id=point.sweep_point_id)
+        except CgaError as exc:
+            n_failed += 1
+            print(f"[sweep] point '{point.sweep_point_id}' FAILED: {exc}", file=sys.stderr)
+            continue
+        print(f"[sweep] point '{point.sweep_point_id}' succeeded: run '{ctx.run_id}' at {ctx.run_dir}")
+
+    n_total = len(points)
+    print(f"[sweep] {n_total - n_failed}/{n_total} combinations succeeded")
+    return 1 if n_failed else 0
 
 
 def cmd_validate(args: argparse.Namespace) -> int:
@@ -273,6 +346,10 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--resume", default=None, help="Run id to resume (pipeline-specific)")
     run_parser.add_argument("--dry-run", action="store_true", help="Resolve config and exit")
     run_parser.set_defaults(func=cmd_run)
+
+    sweep_parser = subparsers.add_parser("sweep", help="Expand a sweep spec and run each combination")
+    sweep_parser.add_argument("--spec", required=True, help="Path to a sweep spec YAML file")
+    sweep_parser.set_defaults(func=cmd_sweep)
 
     validate_parser = subparsers.add_parser("validate", help="Validate an artifact directory")
     validate_parser.add_argument("artifact_dir")

@@ -1,0 +1,35 @@
+# dev_docs/sweep_experiment_plan.md §3 -- comparative evaluation over the 8
+# sampler sweep points (rank_topk.k in {5,10,20,30}, percentile.{top_pct,
+# bottom_pct} in {0.02,0.05,0.08,0.1}), all fixed at GCN + SecRoBERTa +
+# DeepWalk, 100 epochs. Run as:
+#   cga run evaluate --dataset attack_cwe --experiment sampler_sweep_compare
+#
+# Each method_id's model_id is gcn-{sweep_point_id} -- set explicitly on each
+# gcl_train run via --set gcl_train.model.model_id=gcn-<sweep_point_id> (and
+# --set gcl_train.inputs.training_data_sampler_id=<sweep_point_id>) so the 8
+# runs keep separate LATEST pointers instead of all clobbering "gcn"
+# (sweep_experiment_plan.md §3, dev_docs/sprints/sprint_2.md Phase 2.1).
+evaluate:
+  methods:
+    - {method_id: gcn_rank_topk_k5,    label: "GCN rank_topk k=5",     kind: gcl_run, model_id: gcn-rank_topk-k5,    ref: latest}
+    - {method_id: gcn_rank_topk_k10,   label: "GCN rank_topk k=10",    kind: gcl_run, model_id: gcn-rank_topk-k10,   ref: latest}
+    - {method_id: gcn_rank_topk_k20,   label: "GCN rank_topk k=20",    kind: gcl_run, model_id: gcn-rank_topk-k20,   ref: latest}
+    - {method_id: gcn_rank_topk_k30,   label: "GCN rank_topk k=30",    kind: gcl_run, model_id: gcn-rank_topk-k30,   ref: latest}
+    - {method_id: gcn_percentile_p02,  label: "GCN percentile 2%",     kind: gcl_run, model_id: "gcn-percentile-bottom_pct0.02-top_pct0.02", ref: latest}
+    - {method_id: gcn_percentile_p05,  label: "GCN percentile 5%",     kind: gcl_run, model_id: "gcn-percentile-bottom_pct0.05-top_pct0.05", ref: latest}
+    - {method_id: gcn_percentile_p08,  label: "GCN percentile 8%",     kind: gcl_run, model_id: "gcn-percentile-bottom_pct0.08-top_pct0.08", ref: latest}
+    - {method_id: gcn_percentile_p10,  label: "GCN percentile 10%",    kind: gcl_run, model_id: "gcn-percentile-bottom_pct0.1-top_pct0.1",   ref: latest}
+  evaluations:
+    - evaluation_id: neigh
+      kind: neighborhood
+      params:
+        ks: [1, 5, 10, 20]
+        roles: [graph_1, graph_2]
+        views:
+          - {view_id: structural_r1, provider: hop_radius, params: {radius: 1}}
+          - {view_id: structural_r2, provider: hop_radius, params: {radius: 2}}
+          - {view_id: textual, provider: cosine_top_k,
+             params: {top_k: 10, reference: {kind: embedding_store, embedder_id: hf_mean_pool-bert_base, ref: latest}}}
+    - evaluation_id: clusters
+      kind: cluster_quality
+      params: {roles: [graph_1, graph_2], n_clusters: [2, 4, 8, 16, 32]}

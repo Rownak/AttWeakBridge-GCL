@@ -1,6 +1,7 @@
 # target_architecture.md §7.8
 gcl_train:
   inputs:
+    training_data_sampler_id: rank_topk-k30  # matches training_data.sampler's default sampler_id
     training_data_run: latest       # embeddings + universe resolved from its manifest
   model:
     encoder: gcn                    # gcn | gat
