@@ -15,10 +15,10 @@ evaluate:
     - {method_id: gcn_rank_topk_k10,   label: "GCN rank_topk k=10",    kind: gcl_run, model_id: gcn-rank_topk-k10,   ref: latest}
     - {method_id: gcn_rank_topk_k20,   label: "GCN rank_topk k=20",    kind: gcl_run, model_id: gcn-rank_topk-k20,   ref: latest}
     - {method_id: gcn_rank_topk_k30,   label: "GCN rank_topk k=30",    kind: gcl_run, model_id: gcn-rank_topk-k30,   ref: latest}
-    - {method_id: gcn_percentile_p02,  label: "GCN percentile 2%",     kind: gcl_run, model_id: "gcn-percentile-bottom_pct0.02-top_pct0.02", ref: latest}
-    - {method_id: gcn_percentile_p05,  label: "GCN percentile 5%",     kind: gcl_run, model_id: "gcn-percentile-bottom_pct0.05-top_pct0.05", ref: latest}
-    - {method_id: gcn_percentile_p08,  label: "GCN percentile 8%",     kind: gcl_run, model_id: "gcn-percentile-bottom_pct0.08-top_pct0.08", ref: latest}
-    - {method_id: gcn_percentile_p10,  label: "GCN percentile 10%",    kind: gcl_run, model_id: "gcn-percentile-bottom_pct0.1-top_pct0.1",   ref: latest}
+    - {method_id: gcn_percentile_p02,  label: "GCN percentile 2%",     kind: gcl_run, model_id: "gcn-percentile-top_pct0.02-bottom_pct0.02", ref: latest}
+    - {method_id: gcn_percentile_p05,  label: "GCN percentile 5%",     kind: gcl_run, model_id: "gcn-percentile-top_pct0.05-bottom_pct0.05", ref: latest}
+    - {method_id: gcn_percentile_p08,  label: "GCN percentile 8%",     kind: gcl_run, model_id: "gcn-percentile-top_pct0.08-bottom_pct0.08", ref: latest}
+    - {method_id: gcn_percentile_p10,  label: "GCN percentile 10%",    kind: gcl_run, model_id: "gcn-percentile-top_pct0.1-bottom_pct0.1",   ref: latest}
   evaluations:
     - evaluation_id: neigh
       kind: neighborhood

@@ -14,9 +14,48 @@ in one command was explicitly out of scope). A third question (how to keep 8 `gc
 sharing the same encoder, from clobbering one `model_id`'s `LATEST`) was resolved the same way:
 explicit `--set gcl_train.model.model_id=gcn-<sweep_point_id>` per run, no new CLI mechanism.
 
-**Not yet done in this phase**: actually running the 8 `training_data` + `gcl_train` (100 epochs)
-+ `evaluate` combinations and producing the reporting table — that requires real compute time and
-is the next action item, not blocked on anything further.
+The developer then ran all 8 `training_data` + `gcl_train` (100 epochs) combinations and the
+`sampler_sweep_compare` `evaluate` run themselves (`artifacts/evaluations/attack_cwe/
+20260918T023545Z-e334ec67`). Fixed one bug surfaced by that run: `expand_sweep`'s `sweep_point_id`
+sorted swept keys alphabetically, so `cga sweep`'s printed id for the percentile spec
+(`percentile-bottom_pct...-top_pct...`) disagreed with `build_sampler_id`'s actual `LATEST`
+directory name (`percentile-top_pct...-bottom_pct...`, param order declared in
+`_SAMPLER_ID_PARAMS`). `_combination_id` now takes the spec file's own declared key order instead
+of sorting, and `configs/experiments/sampler_sweep_compare.yaml`'s `model_id`s were corrected to
+match. Also added `configs/plots/sampler_sweep_compare.yaml` (precision@10, mrr, silhouette line
+figures + loss curves) — no new renderer code needed, `plot` is generic over `metrics.parquet`.
+
+### Reporting table (Phase 2.1's last checklist item)
+
+Pulled directly from the `evaluate` run's `metrics.json` (`textual` view, averaged over
+`graph_1`/`graph_2` for `mrr`/`precision@10`; `clusters`, averaged over both roles and all five
+`n_clusters` values, for `silhouette_mean`), each `gcl_train` run's `metrics.jsonl` last line
+(`final_loss`, all 8 completed the full 100 epochs), and each `training_data` run's `stats.json`
+(`n_examples`). Sorted by `mrr_textual` descending:
+
+| sweep point | mrr_textual | precision@10_textual | silhouette_mean | final_loss | n_examples |
+|---|---|---|---|---|---|
+| rank_topk k=5   | **0.4351** | **0.1715** | 0.2094 | 0.0792 | 4,545  |
+| rank_topk k=10  | 0.4320 | 0.1699 | 0.2328 | 0.1153 | 9,090  |
+| percentile 2%   | 0.4187 | 0.1595 | 0.2224 | 0.1045 | 13,635 |
+| percentile 8%   | 0.4154 | 0.1533 | 0.2729 | 0.1924 | 54,540 |
+| percentile 5%   | 0.4128 | 0.1556 | 0.2622 | 0.1590 | 34,542 |
+| rank_topk k=20  | 0.4119 | 0.1643 | 0.2521 | 0.1629 | 18,180 |
+| rank_topk k=30  | 0.4116 | 0.1581 | 0.2672 | 0.1999 | 27,270 |
+| percentile 10%  | 0.3937 | 0.1524 | 0.2738 | 0.2140 | 68,175 |
+
+**Best sampler config: `rank_topk`, `k=5`** — highest `mrr_textual` (0.4351) and
+`precision@10_textual` (0.1715) of all 8 points, and the lowest `final_loss` (0.0792, expected given
+by far the fewest examples/epoch). `rank_topk k=10` is a close second on both textual metrics with
+roughly double the examples. Both `rank_topk` results beat every `percentile` point on the primary
+selection metric (`mrr_textual`); `percentile`'s advantage is confined to `silhouette_mean`
+(sanity-check-only per the plan, not a selection criterion) and it only wins there as `top_pct`/
+`bottom_pct` grow larger (10% > 8% > 5% > 2%) — i.e. as the sampler pulls in progressively easier,
+less-informative pairs, which also tracks with the plan's framing of `silhouette` as a check against
+degenerate embeddings rather than a target to maximize. Overall pattern for `rank_topk`: `mrr_textual`
+decreases monotonically as `k` increases (0.4351 -> 0.4320 -> 0.4119 -> 0.4116) — smaller `k` keeps
+only the most confident (closest/farthest) pairs, which appears to matter more for this task than
+having more training examples.
 
 ### How it was completed
 
@@ -70,6 +109,11 @@ is the next action item, not blocked on anything further.
   `neighborhood` + `cluster_quality` evaluations reused verbatim from `full_grid_compare.yaml`
   (same `textual` reference embedder, same `n_clusters` grid), so the two experiments' metrics stay
   directly comparable.
+- **`configs/plots/sampler_sweep_compare.yaml`** (new) — `precision_at_k`, `mrr`, `silhouette` line
+  figures matching the `sampler_sweep_compare` evaluate experiment's `evaluation_id`s, plus
+  `loss_curves.enabled: true`. No new renderer/plot pipeline code was needed: `plot` only ever reads
+  `metrics.parquet` through a `select`/`x`/`hue`/`facet` config, so a new figure set is purely
+  config, same as `neighborhood_compare.yaml`.
 
 ### Files modified or created
 

@@ -28,8 +28,9 @@ needed to run and compare it reproducibly. Design decisions and rationale are in
       isolation) and the `LATEST` partitioning.
 - [x] Write `configs/sweeps/rank_topk_k.yaml` (`k: [5, 10, 20, 30]`) and
       `configs/sweeps/percentile_pct.yaml` (zipped `top_pct`/`bottom_pct: [0.02, 0.05, 0.08, 0.1]`). One Clarification, the model train choose either topk_k sampling  or percentile sampling. Not both. 
-- [ ] Run both sweeps against `attack_cwe`, fixed at GCN + SecRoBERTa + DeepWalk, 100 epochs each.
-- [ ] Add `configs/experiments/sampler_sweep_compare.yaml` and run `evaluate` over all 8 sweep
+- [x] Run both sweeps against `attack_cwe`, fixed at GCN + SecRoBERTa + DeepWalk, 100 epochs each.
+- [x] Add `configs/experiments/sampler_sweep_compare.yaml` and run `evaluate` over all 8 sweep
       points as methods.
-- [ ] Produce the reporting table (`mrr_textual`, `precision@10_textual`, `silhouette_mean`,
-      `final_loss`, `n_examples` per sweep point) and identify the best sampler config.
+- [x] Produce the reporting table (`mrr_textual`, `precision@10_textual`, `silhouette_mean`,
+      `final_loss`, `n_examples` per sweep point) and identify the best sampler config. See
+      `dev_docs/execution_logs/sprint2.md` — best config is `rank_topk`, `k=5`.

@@ -100,21 +100,27 @@ def _short_value(value: Any) -> str:
     return str(value)
 
 
-def _combination_id(combo: dict[str, Any]) -> str:
+def _combination_id(combo: dict[str, Any], *, key_order: list[str]) -> str:
     """Return a short, deterministic id for one expanded combination.
 
     Built from each key's last dotted segment (e.g. ``training_data.sampler.k``
     -> ``k``) so a spec sweeping ``sampler.name`` and ``sampler.k`` together
-    produces ids like ``rank_topk-k20`` rather than repeating the full path.
-    A ``name``-leaf key (e.g. ``sampler.name``) sorts first and contributes
-    only its bare value (``rank_topk``, not ``namerank_topk``), matching the
-    plan's example ids; every other leaf sorts alphabetically after it for
-    determinism (same combo -> same id across runs and Python versions),
-    which is what lets ``sweep_point_id`` double as the stable label the
-    comparison table sorts and joins on.
+    produces ids like ``rank_topk-k20`` rather than repeating the full path. A
+    ``name``-leaf key (e.g. ``sampler.name``) sorts first and contributes only
+    its bare value (``rank_topk``, not ``namerank_topk``), matching the plan's
+    example ids; every other leaf follows in ``key_order`` -- the order the
+    spec file itself declared those keys in ``sweep:`` -- rather than
+    alphabetically, since alphabetical order can silently disagree with
+    ``build_sampler_id``/``build_model_id``'s own param order (e.g.
+    ``percentile``'s ``top_pct`` before ``bottom_pct``) and produce a
+    ``sweep_point_id`` that looks plausible but never matches the artifact
+    directory a downstream ``gcl_train``/``evaluate`` config needs to
+    reference. Same combo -> same id across runs and Python versions, which
+    is what lets ``sweep_point_id`` double as the stable label the comparison
+    table sorts and joins on.
     """
-    name_keys = sorted(k for k in combo if k.rsplit(".", 1)[-1] == "name")
-    other_keys = sorted(k for k in combo if k.rsplit(".", 1)[-1] != "name")
+    name_keys = [k for k in key_order if k.rsplit(".", 1)[-1] == "name"]
+    other_keys = [k for k in key_order if k.rsplit(".", 1)[-1] != "name"]
 
     parts = [_short_value(combo[key]) for key in name_keys]
     for key in other_keys:
@@ -132,6 +138,7 @@ def expand_sweep(spec: SweepSpec) -> list[SweepPoint]:
     """
     zipped = list(spec.zipped_keys)
     crossed_keys = [k for k in spec.axes if k not in zipped]
+    key_order = zipped + crossed_keys
 
     axis_names: list[str] = []
     axis_values: list[list[Any]] = []
@@ -154,7 +161,7 @@ def expand_sweep(spec: SweepSpec) -> list[SweepPoint]:
                     combo[key] = v
             else:
                 combo[name] = value
-        sweep_point_id = _combination_id(combo)
+        sweep_point_id = _combination_id(combo, key_order=key_order)
         points.append(SweepPoint(sweep_point_id=sweep_point_id, overrides=combo))
 
     _assert_unique_ids(points)
