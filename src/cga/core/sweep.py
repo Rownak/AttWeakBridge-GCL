@@ -8,6 +8,15 @@ paired by index instead -- each zipped key's array must be the same length,
 and the zipped keys are expanded together as a single axis of the cross
 product with the other (non-zipped) keys.
 
+An optional top-level ``fixed:`` map (Sprint 2 Phase 2.2) holds single-valued
+overrides that every point needs (e.g. pinning an upstream run's id, or an
+epoch count) but that aren't part of the grid being compared. ``fixed:``
+values are applied to every ``SweepPoint.overrides`` but excluded from
+``sweep_point_id`` -- putting them in ``sweep:`` instead would work
+functionally (a one-element array crossed against everything else), but bloats
+the id with values that never vary, e.g. turning ``alpha0`` into
+``alpha0-training_data_sampler_idrank_topk-k5-epochs100``.
+
 This module only expands a spec into ``SweepPoint``s; it does not run
 anything -- ``cga sweep``'s CLI command drives each point through the
 existing ``build_config -> RunContext.create -> pipeline.run`` path (no
@@ -37,12 +46,16 @@ class SweepSpec:
         dataset: Dataset id to run against.
         axes: Dotted-path -> value-array map (excludes the ``zip:`` key itself).
         zipped_keys: Dotted paths paired by index instead of crossed, or empty.
+        fixed: Dotted-path -> value map applied to every point's overrides,
+            excluded from ``sweep_point_id`` (Sprint 2 Phase 2.2). Empty by
+            default -- older spec files with no ``fixed:`` block are unaffected.
     """
 
     pipeline: str
     dataset: str
     axes: dict[str, list[Any]]
     zipped_keys: tuple[str, ...] = ()
+    fixed: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_file(cls, path: str | Path) -> "SweepSpec":
@@ -50,8 +63,9 @@ class SweepSpec:
 
         Raises:
             ConfigError: If ``pipeline``/``dataset``/``sweep`` are missing, a
-                zipped key's array length disagrees with its peers, or a
-                zipped key is not itself present in ``sweep:``.
+                zipped key's array length disagrees with its peers, a zipped
+                key is not itself present in ``sweep:``, or a ``fixed:`` key
+                also appears in ``sweep:`` (ambiguous which one wins).
         """
         raw = load_yaml(path)
         for required in ("pipeline", "dataset", "sweep"):
@@ -60,6 +74,7 @@ class SweepSpec:
 
         sweep_block = dict(raw["sweep"])
         zipped_keys = tuple(sweep_block.pop(_ZIP_KEY, ()) or ())
+        fixed = dict(raw.get("fixed") or {})
 
         for key in zipped_keys:
             if key not in sweep_block:
@@ -74,7 +89,17 @@ class SweepSpec:
                     f"Sweep spec {path}: zipped keys must have equal-length value arrays, got {lengths}"
                 )
 
-        return cls(pipeline=raw["pipeline"], dataset=raw["dataset"], axes=sweep_block, zipped_keys=zipped_keys)
+        overlap = set(fixed) & set(sweep_block)
+        if overlap:
+            raise ConfigError(f"Sweep spec {path}: key(s) {sorted(overlap)} appear in both 'fixed:' and 'sweep:'")
+
+        return cls(
+            pipeline=raw["pipeline"],
+            dataset=raw["dataset"],
+            axes=sweep_block,
+            zipped_keys=zipped_keys,
+            fixed=fixed,
+        )
 
 
 @dataclass(frozen=True)
@@ -135,6 +160,10 @@ def expand_sweep(spec: SweepSpec) -> list[SweepPoint]:
     Zipped keys are treated as a single paired axis (index ``i`` of every
     zipped key's array together); every other key is crossed against every
     other axis and against the zipped axis, in cartesian-product order.
+    ``spec.fixed`` (if any) is merged into every point's ``overrides`` after
+    ``sweep_point_id`` is computed from the varying keys alone, so a pinned
+    value (e.g. an upstream run id) reaches ``cga run`` without lengthening
+    the id every point is labeled and compared by.
     """
     zipped = list(spec.zipped_keys)
     crossed_keys = [k for k in spec.axes if k not in zipped]
@@ -162,6 +191,8 @@ def expand_sweep(spec: SweepSpec) -> list[SweepPoint]:
             else:
                 combo[name] = value
         sweep_point_id = _combination_id(combo, key_order=key_order)
+        if spec.fixed:
+            combo = {**combo, **spec.fixed}
         points.append(SweepPoint(sweep_point_id=sweep_point_id, overrides=combo))
 
     _assert_unique_ids(points)

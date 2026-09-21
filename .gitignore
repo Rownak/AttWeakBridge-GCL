@@ -6,6 +6,7 @@ def_docs/
 /data/
 /artifacts/
 /models/
+mlruns/
 
 # uv / Python
 .venv/

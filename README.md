@@ -164,6 +164,37 @@ trained model — so it expects the embedding stores and both `gcn`/`gat` runs l
 [configs/experiments/neighborhood_compare.yaml](configs/experiments/neighborhood_compare.yaml) to
 exist. Trim that `methods:` list if you have only run a subset.
 
+## Sweeping a hyperparameter
+
+`cga sweep --spec <file>` expands a YAML spec's array-valued config paths into one `cga run` per
+combination, tagging each run's manifest with a `sweep_point_id` so results stay traceable back to
+the exact overrides that produced them. Keys are crossed (cartesian product) by default; `zip:`
+pairs keys by index instead; `fixed:` pins values that every point needs but that don't vary. A
+failed combination is logged and skipped rather than aborting the whole grid. See
+[dev_docs/sweep_experiment_plan.md](dev_docs/sweep_experiment_plan.md) and
+[dev_docs/sprints/sprint_2.md](dev_docs/sprints/sprint_2.md) for the design and per-phase results.
+
+```bash
+# training_data sampler sweep (Phase 2.1): rank_topk.k, and percentile.{top_pct,bottom_pct}
+uv run cga sweep --spec configs/sweeps/rank_topk_k.yaml
+uv run cga sweep --spec configs/sweeps/percentile_pct.yaml
+
+# gcl_train loss-mix sweep (Phase 2.2): alpha in {0.0, 0.25, 0.5, 0.75, 1.0},
+# sampler held fixed at Phase 2.1's winner (rank_topk, k=5)
+uv run cga sweep --spec configs/sweeps/alpha.yaml
+
+# Compare every sweep point's evaluate metrics side by side, then render figures
+uv run cga run evaluate --dataset attack_cwe --experiment sampler_sweep_compare
+uv run cga run plot --dataset attack_cwe --config configs/plots/sampler_sweep_compare.yaml
+
+uv run cga run evaluate --dataset attack_cwe --experiment alpha_sweep_compare
+uv run cga run plot --dataset attack_cwe --config configs/plots/alpha_sweep_compare.yaml
+```
+
+Each `configs/sweeps/*.yaml` spec's own header comment documents which config paths it sweeps and
+why; each `configs/experiments/*_sweep_compare.yaml`'s `methods:` list must have a `model_id`/
+`ref: latest` entry per sweep point, matching the ids that spec produces.
+
 ## Configuration
 
 All configuration is YAML under [configs/](configs/); nothing else is configuration. Layers are deep

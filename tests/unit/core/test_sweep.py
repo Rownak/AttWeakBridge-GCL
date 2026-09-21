@@ -149,6 +149,57 @@ def test_expand_sweep_sweep_point_id_is_deterministic():
     assert ids_first == ids_second == ["k20"]
 
 
+def test_from_file_parses_fixed_block(tmp_path):
+    path = _write_spec(
+        tmp_path,
+        {
+            "pipeline": "gcl_train",
+            "dataset": "attack_cwe",
+            "fixed": {"gcl_train.inputs.training_data_sampler_id": "rank_topk-k5", "gcl_train.train.epochs": 100},
+            "sweep": {"gcl_train.loss.alpha": [0.0, 0.5, 1.0]},
+        },
+    )
+    spec = SweepSpec.from_file(path)
+    assert spec.fixed == {"gcl_train.inputs.training_data_sampler_id": "rank_topk-k5", "gcl_train.train.epochs": 100}
+
+
+def test_from_file_no_fixed_block_defaults_empty(tmp_path):
+    path = _write_spec(
+        tmp_path,
+        {"pipeline": "training_data", "dataset": "attack_cwe", "sweep": {"training_data.sampler.k": [5]}},
+    )
+    spec = SweepSpec.from_file(path)
+    assert spec.fixed == {}
+
+
+def test_from_file_fixed_key_overlapping_sweep_raises(tmp_path):
+    path = _write_spec(
+        tmp_path,
+        {
+            "pipeline": "gcl_train",
+            "dataset": "attack_cwe",
+            "fixed": {"gcl_train.loss.alpha": 0.5},
+            "sweep": {"gcl_train.loss.alpha": [0.0, 1.0]},
+        },
+    )
+    with pytest.raises(ConfigError):
+        SweepSpec.from_file(path)
+
+
+def test_expand_sweep_fixed_values_applied_but_excluded_from_id():
+    spec = SweepSpec(
+        pipeline="gcl_train",
+        dataset="attack_cwe",
+        axes={"gcl_train.loss.alpha": [0.0, 0.5, 1.0]},
+        fixed={"gcl_train.inputs.training_data_sampler_id": "rank_topk-k5", "gcl_train.train.epochs": 100},
+    )
+    points = expand_sweep(spec)
+    assert [p.sweep_point_id for p in points] == ["alpha0", "alpha0.5", "alpha1"]
+    for point in points:
+        assert point.overrides["gcl_train.inputs.training_data_sampler_id"] == "rank_topk-k5"
+        assert point.overrides["gcl_train.train.epochs"] == 100
+
+
 def test_expand_sweep_duplicate_sweep_point_id_raises():
     # "10" (int) and "10" (str) are different combinations but render to the
     # same id string ("k10") -- the guard must catch this rather than let one

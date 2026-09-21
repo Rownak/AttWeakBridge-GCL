@@ -1,4 +1,4 @@
-# Sprint 2 — Sampler sweep and comparison tooling
+# Sprint 2 — Sweep tooling and hyperparameter selection
 
 ## Phase 2.1 — Sampler sweep infrastructure and comparison
 
@@ -178,4 +178,97 @@ uv run cga run gcl_train --dataset attack_cwe \
   --set gcl_train.train.epochs=100
 
 uv run cga run evaluate --dataset attack_cwe --experiment sampler_sweep_compare
+```
+
+---
+
+## Phase 2.2 — `alpha` sweep (text/graph loss weight)
+
+### What was implemented
+
+Sequential to Phase 2.1: sweeps `gcl_train.loss.alpha` (`TrainStep`'s
+`alpha * L_text + (1 - alpha) * L_graph` mix, [gcl_train/pipeline.py:275](../../src/cga/pipelines/gcl_train/pipeline.py#L275))
+over `{0.0, 0.25, 0.5, 0.75, 1.0}`, with the sampler held fixed at Phase 2.1's winner
+(`rank_topk`, `k=5`) instead of the pipeline config's own default (`rank_topk-k30`). The endpoints
+are deliberate ablations (`alpha=0.0` = graph-loss-only, `alpha=1.0` = text-loss-only), not just
+grid edges.
+
+`cga sweep` is pipeline-agnostic, so no new command was needed — this phase runs it directly against
+`gcl_train` rather than fanning `cga sweep` (`training_data`) into per-point `cga run gcl_train`
+calls the way Phase 2.1 did (that phase swept an upstream pipeline; this one sweeps `gcl_train`
+itself). One design question resolved before implementing rather than guessed: how each `alpha`
+point keeps its own `models/gcl/attack_cwe/{model_id}/LATEST` without touching `build_model_id`
+(which defaults to the bare encoder, `gcn`, and would otherwise let all five points clobber the same
+lineage — the same collision class Phase 2.1's `sampler_id` partitioning fixed for `training_data`).
+Resolved by `zip:`-pairing `gcl_train.model.model_id` against `alpha` in the spec with explicit ids
+(`gcn-alpha0`, `gcn-alpha0.25`, …), keeping `build_model_id` and the existing `gcn`/`gat` id scheme
+untouched.
+
+A second gap surfaced while writing the spec: `cga sweep` has no `--set` flag and no `--experiment`
+layer (`cmd_sweep` builds only `base + dataset + pipeline + overrides`), but two values needed
+pinning on every point (`gcl_train.inputs.training_data_sampler_id: rank_topk-k5`,
+`gcl_train.train.epochs: 100`) without varying across the grid. Putting them in `sweep:` as
+single-element arrays would work — `expand_sweep` already crosses single-value axes fine — but
+`_combination_id` folds every axis key into `sweep_point_id`, producing
+`alpha0-model_idgcn-alpha0-training_data_sampler_idrank_topk-k5-epochs100` instead of the readable
+`alpha0-model_idgcn-alpha0`. Added a `fixed:` block to `SweepSpec`/`expand_sweep`
+(`src/cga/core/sweep.py`): a dotted-path → value map, parsed alongside `sweep:`/`zip:`, merged into
+every point's `overrides` *after* `sweep_point_id` is computed from the varying keys alone. A
+`fixed:`/`sweep:` key overlap raises `ConfigError` (ambiguous which one wins). Confirmed via
+`build_config` dry-run over all 5 points that `gcl_train.inputs.training_data_sampler_id` and
+`gcl_train.train.epochs` land correctly in the resolved config while `sweep_point_id` stays short.
+
+Also caught and fixed, before it caused a resolution failure downstream, the same class of bug
+Phase 2.1 hit with `percentile`'s param order: `_short_value` renders floats with `%g`
+(`0.0` → `"0"`, `1.0` → `"1"`, not `"0.0"`/`"1.0"`), so the spec's `model_id` values had to be
+written as `gcn-alpha0`/`gcn-alpha1` (not `gcn-alpha0.0`/`gcn-alpha1.0`) to match what
+`expand_sweep` actually produces. Verified by dry-running `expand_sweep` and `build_config` over the
+finished spec rather than assuming the string shape.
+
+An incidental, unrelated working-tree change to `gcl_train/pipeline.py`'s `LoadStep` (removing the
+`sampler_id`-partitioned lineage path Phase 2.1 added, reverting `LoadStep` to the old flat
+`artifacts/training_data/{dataset_id}/LATEST` lookup) was present before this phase's edits and was
+reverted via `git checkout --` rather than built on — keeping it would have silently undone Phase
+2.1's `LATEST`-collision fix and broken 3 `gcl_train` pipeline tests, which is what surfaced it.
+
+### Files modified or created
+
+- `src/cga/core/sweep.py` — added `SweepSpec.fixed` + parsing/validation, and `expand_sweep`
+  merging `fixed` into overrides post-id.
+- `tests/unit/core/test_sweep.py` — added tests: `fixed:` parses, defaults to `{}` when absent,
+  raises on `fixed:`/`sweep:` key overlap, and is applied-but-excluded-from-id in `expand_sweep`.
+- `configs/sweeps/alpha.yaml` — new sweep spec (`gcl_train`, zipped `alpha`/`model_id`, `fixed:`
+  pinning sampler + epochs).
+- `configs/experiments/alpha_sweep_compare.yaml` — new `evaluate` experiment, 5 `gcl_run` methods.
+- `configs/plots/alpha_sweep_compare.yaml` — new `plot` config, same figure shape as
+  `sampler_sweep_compare.yaml` (precision@10, mrr, silhouette + loss curves).
+- `dev_docs/sprints/sprint_2.md` — widened the sprint objective to cover both phases; Phase 2.2
+  checklist added and marked through the tooling/config items (compute-bound items left open).
+
+### Challenges, ambiguity, assumptions
+
+- **`final_loss` is not a valid `alpha`-selection metric**, unlike Phase 2.1 where the objective was
+  constant across sweep points. Here `alpha` changes the objective itself — `alpha=0` optimizes only
+  `L_graph`, so a lower loss there says nothing about embedding quality, only that `L_graph` is
+  easier to minimize alone. The phase records `final_loss` per point but selects on `mrr_textual`,
+  same as Phase 2.1.
+- **No `--experiment`/`--set` support in `cga sweep`** was treated as an existing constraint, not
+  something to extend in this phase — the new `fixed:` block was scoped narrowly to the one gap it
+  needed to close (pinning non-varying values without CLI changes), rather than adding a broader
+  config-layering mechanism to `cmd_sweep`.
+
+### CLI commands to test and run current phase
+
+```
+uv run pytest tests/unit/core/test_sweep.py -q                          # 15 passed
+uv run pytest tests/unit -q                                             # full suite, 372 passed
+```
+
+Not yet run (next action item — real compute, not blocked): the actual sweep and comparison —
+
+```
+uv run cga sweep --spec configs/sweeps/alpha.yaml
+
+uv run cga run evaluate --dataset attack_cwe --experiment alpha_sweep_compare
+uv run cga run plot --dataset attack_cwe --config configs/plots/alpha_sweep_compare.yaml
 ```
