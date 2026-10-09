@@ -28,8 +28,11 @@ dataset:
     label:                     [label]
     label_definition:          [label, definition]
     label_synonyms_definition: [label, synonym, definition]
-  alignments:
-    equivalence:
-      train: refs_equiv/train.tsv
-      test:  refs_equiv/test.tsv
-      candidates: refs_equiv/test.cands.tsv
+  # Sprint 3 ignores the gold alignments: training_data would mark every endpoint of a
+  # test-split pair as held_out, reintroducing the dataset's own split. Restore this block
+  # in the gold-set sprint.
+  # alignments:
+  #   equivalence:
+  #     train: refs_equiv/train.tsv
+  #     test:  refs_equiv/test.tsv
+  #     candidates: refs_equiv/test.cands.tsv
