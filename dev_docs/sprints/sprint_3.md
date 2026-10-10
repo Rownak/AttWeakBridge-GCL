@@ -66,13 +66,13 @@ Background: [oaei_bioml_ncit_doid_dataset_structure.md](../oaei_bioml_ncit_doid_
 
 ## Phase 3.1 — Embeddings
 
-- [ ] SapBERT (the text tower):
+- [x] SapBERT (the text tower):
       `uv run cga run embed --dataset ncit_doid --set embed.inputs.text_variant=label_synonyms_definition --set embed.embedder.model_ref=cambridgeltl/SapBERT-from-PubMedBERT-fulltext --set embed.embedder.label=sapbert`
-- [ ] bert-base-uncased (reference only): same command with
+- [x] bert-base-uncased (reference only): same command with
       `model_ref=bert-base-uncased` and `label=bert_base`.
-- [ ] DeepWalk: `uv run cga run embed --dataset ncit_doid --config configs/pipelines/embed_deepwalk.yaml`
-- [ ] node2vec: same file with `--set embed.embedder.kind=node2vec --set embed.embedder.label=node2vec`.
-- [ ] Record each store's `status.parquet` failure count (classes with empty text) and its runtime.
+- [x] DeepWalk: `uv run cga run embed --dataset ncit_doid --config configs/pipelines/embed_deepwalk.yaml`
+- [ ] (skipped, optional; needed for Phase 3.5) node2vec: same file with `--set embed.embedder.kind=node2vec --set embed.embedder.label=node2vec`. (optional)
+- [x] Record each store's `status.parquet` failure count (classes with empty text) and its runtime.
 
 ## Phase 3.2 — First end-to-end training run
 
