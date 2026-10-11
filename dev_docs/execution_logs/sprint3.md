@@ -106,3 +106,72 @@ uv run cga run embed --dataset ncit_doid --set embed.inputs.text_variant=label_s
 uv run cga run embed --dataset ncit_doid --set embed.inputs.text_variant=label_synonyms_definition --set embed.embedder.model_ref=bert-base-uncased --set embed.embedder.label=bert_base --set embed.embedder.batch_size=512
 uv run cga run embed --dataset ncit_doid --config configs/pipelines/embed_deepwalk.yaml
 ```
+
+## Phase 3.0.0 — NCIT parser: edges for named intersection members
+
+### What changed
+- [owl_parser.py](../../src/cga/adapters/ncit_doid/owl_parser.py): `OwlClassRecord.intersection_parent_iris`
+  holds the named members of `owl:equivalentClass -> owl:intersectionOf` (via `_named_intersection_members`);
+  `owl:Restriction` members and bare-Restriction `equivalentClass` axioms (e.g. `C27691`'s second axiom)
+  are ignored. `iter_owl_edges(..., edge_sources=...)` emits them as `relation="subClassOf"` edges,
+  deduplicated against direct pointers; dangling targets are dropped; unknown source names raise `ValueError`.
+  `raw_sha256` includes the new field only when non-empty, so DOID hashes are unchanged.
+- [adapter.py](../../src/cga/adapters/ncit_doid/adapter.py): `OntologyConfig.edge_sources`
+  (default `[subClassOf]`); [ncit_doid.yaml](../../configs/datasets/ncit_doid.yaml) sets
+  `[subClassOf, equivalent_intersection]` for NCIT only.
+- Docs: `owl_parser.py` module docstring, `oaei_bioml_ncit_doid_dataset_structure.md`.
+- Tests: new fixture `tests/unit/adapters/fixtures/ncit_intersection_sample.owl` and 8 tests in
+  `test_owl_parser.py` (1 named + restriction -> 1 edge; 3 named -> 3 edges; no duplicate with a direct
+  parent; bare-Restriction axiom ignored; dangling dropped; default unchanged; bad source raises; hash).
+
+### Bug found and fixed along the way
+`parse_owl_ontology` called `elem.clear()` on every `owl:Class` end event, including the anonymous
+`<owl:Class>` inside `equivalentClass`. That wiped the `intersectionOf` before the named parent class was
+read, so nothing could be extracted. Anonymous classes are now skipped without clearing.
+
+### Verification (full NCIT/DOID parse, no re-ingest yet)
+| | before | after |
+|---|---|---|
+| NCIT edges | 9,364 | **23,486** |
+| NCIT isolated nodes | 7,841 | **6** |
+| DOID edges | 9,388 | 9,388 |
+`C27691` yields its two named members (`C27689`, `C27699`). Matches the analysis (option B) exactly.
+
+### Still to do (unchecked in sprint_3.md)
+- Re-run ingest (Phase 3.0.1 commands) and record the new stats; the 3.0.1 numbers above are pre-change.
+- Re-run DeepWalk: the Phase 3.1 `deepwalk-deepwalk` store was built from the old graph. Text stores
+  (`sapbert`, `bert_base`) depend only on nodes/texts, which are unchanged, but whether downstream
+  steps require them to reference the new ingest run id has not been checked.
+
+### Commands
+```
+uv run pytest tests/unit -q
+uv run cga run ingest --dataset ncit_doid
+```
+
+### Re-ingest after the parser change (Phase 3.0.0 verification)
+Run `20261011T134334Z-6d45b8af` (supersedes `20261009T164439Z-2d34c6da` as `LATEST`).
+
+| | Old run | New run |
+|---|---|---|
+| nodes | 24,227 | 24,227 (unchanged; same 80/10/10 split seed) |
+| NCIT edges | 9,364 | **23,486** |
+| DOID edges | 9,388 | 9,388 |
+| total edges / dangling dropped | 18,752 / 0 | 32,874 / 0 |
+| NCIT isolated nodes | 7,841 | **6** (`C12218`, `C20181`, `C22187`, `C22188`, `C43431`, `C97325`) |
+| DOID isolated nodes | 0 | 0 |
+| mean / max degree | 2.29 / 504 | 2.71 / 507 |
+
+Matches the analysis (option B). `edge_id`s are unique. The 6 isolated nodes are NCIT top-level categories.
+The old ingest run is no longer `LATEST`, so the existing `sapbert`/`bert_base`/`deepwalk` stores still
+reference it; DeepWalk must be re-run (see "Still to do" above).
+
+### DeepWalk re-run on the new graph (supersedes the Phase 3.1 DeepWalk store)
+- Run `deepwalk-deepwalk/20261011T134446Z-d5aa89ed` (now `LATEST`), ingest input `20261011T134334Z-6d45b8af`,
+  5,939 s (~99 min; the Phase 3.1 run took 4,013 s on a smaller graph).
+- **24,221 vectors x 128; `ok` 24,221, `skipped` 6, `failed` 0.** The 6 skipped are the isolated NCIT
+  top-level classes (was 7,841). The Phase 3.1 "7,841 skipped" finding no longer applies.
+- **Text stores remain valid, not re-run.** The new ingest has identical node ids (same order) and identical
+  `text_sha256` for all three variants; `training_data` joins stores by `node_id` and does not check the ingest
+  run id. Their manifests still name the old ingest run `20261009T164439Z-2d34c6da`.
+- Old DeepWalk runs (`20261009T201117Z-a544b033` and the stale `...185242Z-a544b033`) are unused and can be deleted.

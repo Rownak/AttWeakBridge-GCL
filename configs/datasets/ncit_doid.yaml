@@ -10,6 +10,9 @@ dataset:
       file: ncit.owl
       id_style: fragment             # IRI fragment after '#'
       edge_predicates: [rdfs:subClassOf]
+      # ~Half of NCIT classes have no direct subClassOf; their parents are the named members
+      # of an equivalentClass/intersectionOf definition (dev_docs/ncit_edge_extraction_analysis.md).
+      edge_sources: [subClassOf, equivalent_intersection]
       predicate_map:                 # text role -> ontology-specific predicates
         label:      [rdfs:label]
         synonym:    [P90]

@@ -94,3 +94,77 @@ def test_doid_edges_drop_dangling_parent():
     assert len(edges) == 1
     assert edges[0].src_id == "doid:DOID_4362"
     assert edges[0].dst_id == "doid:DOID_120"
+
+
+INTERSECTION_FIXTURE = Path(__file__).parent / "fixtures" / "ncit_intersection_sample.owl"
+_NCIT_NS = "http://ncicb.nci.nih.gov/xml/owl/EVS/Thesaurus.owl#"
+_BOTH_SOURCES = ("subClassOf", "equivalent_intersection")
+
+
+def _edge_pairs(edge_sources=None):
+    result = parse_owl_ontology(INTERSECTION_FIXTURE)
+    kwargs = {} if edge_sources is None else {"edge_sources": edge_sources}
+    edges = list(iter_owl_edges(result, graph_key="ncit", graph_role="graph_1", **kwargs))
+    assert all(e.relation == "subClassOf" for e in edges)
+    return sorted((e.src_id, e.dst_id) for e in edges)
+
+
+def test_parse_collects_named_intersection_members_and_skips_restrictions():
+    result = parse_owl_ontology(INTERSECTION_FIXTURE)
+    assert result.classes[_NCIT_NS + "C10"].intersection_parent_iris == [_NCIT_NS + "C1"]
+    assert result.classes[_NCIT_NS + "C10"].parent_iris == []
+    # C13 has an intersection axiom and a bare Restriction axiom; only the former counts.
+    assert result.classes[_NCIT_NS + "C13"].intersection_parent_iris == [_NCIT_NS + "C2", _NCIT_NS + "C3"]
+
+
+def test_default_edge_sources_ignore_intersection_members():
+    # Default keeps pre-change behaviour (DOID and old configs): no direct subClassOf here.
+    assert _edge_pairs() == [("ncit:C12", "ncit:C1")]
+
+
+def test_intersection_edges_one_named_plus_restriction_gives_one_edge():
+    pairs = _edge_pairs(_BOTH_SOURCES)
+    assert [p for p in pairs if p[0] == "ncit:C10"] == [("ncit:C10", "ncit:C1")]
+
+
+def test_intersection_edges_three_named_members_give_three_edges():
+    pairs = _edge_pairs(_BOTH_SOURCES)
+    assert [p for p in pairs if p[0] == "ncit:C11"] == [
+        ("ncit:C11", "ncit:C1"),
+        ("ncit:C11", "ncit:C2"),
+        ("ncit:C11", "ncit:C3"),
+    ]
+
+
+def test_intersection_edges_do_not_duplicate_direct_parent():
+    pairs = _edge_pairs(_BOTH_SOURCES)
+    assert pairs.count(("ncit:C12", "ncit:C1")) == 1
+
+
+def test_intersection_edges_ignore_bare_restriction_axiom_and_drop_dangling():
+    pairs = _edge_pairs(_BOTH_SOURCES)
+    assert [p for p in pairs if p[0] == "ncit:C13"] == [("ncit:C13", "ncit:C2"), ("ncit:C13", "ncit:C3")]
+    assert not [p for p in pairs if p[0] == "ncit:C14"]
+    assert len(pairs) == 1 + 3 + 1 + 2
+
+
+def test_unknown_edge_source_raises():
+    import pytest
+
+    result = parse_owl_ontology(INTERSECTION_FIXTURE)
+    with pytest.raises(ValueError, match="Unknown edge_sources"):
+        list(iter_owl_edges(result, graph_key="ncit", graph_role="graph_1", edge_sources=["bogus"]))
+
+
+def test_raw_sha256_changes_only_when_intersection_parents_present():
+    result = parse_owl_ontology(INTERSECTION_FIXTURE)
+    ncit = parse_owl_ontology(NCIT_FIXTURE)
+    # Fixture C3224 has both; its hash must differ from the no-intersection hash of the same content.
+    from cga.adapters.ncit_doid.owl_parser import _record_sha256
+
+    c = ncit.classes[_NCIT_NS + "C3224"]
+    assert c.raw_sha256 == _record_sha256(c.iri, c.parent_iris, c.texts, c.intersection_parent_iris)
+    assert c.raw_sha256 != _record_sha256(c.iri, c.parent_iris, c.texts)
+    assert result.classes[_NCIT_NS + "C1"].raw_sha256 == _record_sha256(
+        _NCIT_NS + "C1", [], result.classes[_NCIT_NS + "C1"].texts
+    )

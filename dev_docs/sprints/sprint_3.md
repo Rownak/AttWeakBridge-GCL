@@ -43,7 +43,34 @@ Background: [oaei_bioml_ncit_doid_dataset_structure.md](../oaei_bioml_ncit_doid_
 
 ---
 
-## Phase 3.0 — Ingest without alignments, and data sanity check
+## Phase 3.0.0 — NCIT parser: add edges for named intersection members
+
+Why: the parser only keeps direct `rdfs:subClassOf rdf:resource` pointers, so 7,841 of 15,762 NCIT
+classes (49.7%) have no edge (no DeepWalk walk, isolated GCN node). Their parents are written only as
+`owl:equivalentClass → owl:intersectionOf` logical definitions. See
+[ncit_edge_extraction_analysis.md](../ncit_edge_extraction_analysis.md) (option B). Restriction
+fillers (options C/D) stay out of scope.
+
+- [x] Inspect the open point from the analysis: `C27691` has a second `owl:equivalentClass` that is a
+      bare `owl:Restriction`. Confirm the parser ignores it and still reads the intersection one.
+- [x] `owl_parser.py`: `OwlClassRecord` gains `intersection_parent_iris`; `parse_owl_ontology` descends
+      into `owl:equivalentClass → owl:Class → owl:intersectionOf` and collects members that are named
+      classes (`rdf:Description`/`owl:Class` with `rdf:about`), ignoring `owl:Restriction` members.
+      `raw_sha256` includes the new field.
+- [x] `iter_owl_edges` takes `edge_sources` (`subClassOf`, `equivalent_intersection`) and emits the
+      intersection parents as `relation="subClassOf"` edges, deduplicated against direct pointers and
+      dropping targets that are not known classes.
+- [x] `OntologyConfig.edge_sources` (default `[subClassOf]`, so DOID is unchanged), set to both sources
+      for NCIT in `configs/datasets/ncit_doid.yaml`; the adapter passes it through.
+- [x] Unit tests (`tests/unit/adapters/`): fixture class modeled on `C100051` (one named + one
+      restriction member) yields exactly one extra edge; a class with 3 named members yields 3 edges;
+      a member also listed as a direct parent is not duplicated; default `edge_sources` is unchanged.
+- [x] Update the `owl_parser.py` module docstring and `oaei_bioml_ncit_doid_dataset_structure.md`
+      (logical axioms are no longer "not interpreted").
+- [x] Re-ingest (Phase 3.0.1) and confirm NCIT edges ≈ 23,486 and isolated NCIT nodes ≈ 6.
+- [x] The Phase 3.1 `deepwalk-deepwalk` store was built from the old graph and is stale: re-run DeepWalk
+      after re-ingest (and re-check that the text stores, which are node/text-only, remain valid).
+
 
 - [x] **Disable the gold alignments for this sprint.** Remove (or comment out) the `alignments:`
       block in `configs/datasets/ncit_doid.yaml`. This is needed even though nothing here scores

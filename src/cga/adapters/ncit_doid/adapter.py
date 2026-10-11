@@ -32,6 +32,9 @@ class OntologyConfig(BaseModel):
     file: str
     id_style: str = "fragment"
     edge_predicates: list[str] = ["rdfs:subClassOf"]
+    # Which parent pointers become edges (see owl_parser.iter_owl_edges). NCIT needs both:
+    # about half its classes state their parents only via equivalentClass intersections.
+    edge_sources: list[str] = ["subClassOf"]
     predicate_map: dict[str, list[str]]
 
 
@@ -119,9 +122,13 @@ class NcitDoidAdapter(DatasetAdapter):
 
     def iter_edges(self) -> Iterator[EdgeRecord]:
         ncit = parse_owl_ontology(self._ncit_path)
-        yield from iter_owl_edges(ncit, graph_key="ncit", graph_role="graph_1")
+        yield from iter_owl_edges(
+            ncit, graph_key="ncit", graph_role="graph_1", edge_sources=self._config.ncit.edge_sources
+        )
         doid = parse_owl_ontology(self._doid_path)
-        yield from iter_owl_edges(doid, graph_key="doid", graph_role="graph_2")
+        yield from iter_owl_edges(
+            doid, graph_key="doid", graph_role="graph_2", edge_sources=self._config.doid.edge_sources
+        )
 
     def iter_texts(self) -> Iterator[TextRecord]:
         ncit = parse_owl_ontology(self._ncit_path)

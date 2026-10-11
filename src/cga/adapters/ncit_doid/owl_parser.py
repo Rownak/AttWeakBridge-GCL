@@ -1,10 +1,14 @@
 """OWL/XML ontology -> canonical records, shared by NCIT and DOID.
 
 Streaming parse (``xml.etree.ElementTree.iterparse``) of ``owl:Class`` elements,
-reading each class's ``rdf:about`` IRI and direct ``rdfs:subClassOf
-rdf:resource`` pointers only — NCIT's ``owl:equivalentClass`` / ``intersectionOf``
-/ ``Restriction`` logical axioms are not interpreted (target_architecture.md
-§4.3, backlog §12). Text extraction is driven entirely by a per-ontology
+reading each class's ``rdf:about`` IRI, its direct ``rdfs:subClassOf
+rdf:resource`` pointers, and the *named* members of an ``owl:equivalentClass``
+-> ``owl:intersectionOf`` definition. A named intersection member is an entailed
+direct superclass, so it is equivalent to a ``subClassOf`` pointer; about half
+of NCIT's classes record their parents only this way (see
+dev_docs/ncit_edge_extraction_analysis.md). ``owl:Restriction`` members (typed,
+non-is-a relations) are still not interpreted (target_architecture.md §4.3,
+backlog §12). Text extraction is driven entirely by a per-ontology
 **predicate map** passed in from the dataset config, since NCIT and DOID use
 different annotation-property vocabularies for the same text roles (NCIT's
 ``P90``/``P97``/``P325`` vs. DOID's ``oboInOwl:hasExactSynonym``/
@@ -17,10 +21,13 @@ import hashlib
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterator
+from typing import TYPE_CHECKING, Iterator, Sequence
 
 from cga.data.ids import make_node_id
 from cga.data.schemas import EdgeRecord, NodeRecord, TextRecord
+
+if TYPE_CHECKING:
+    import xml.etree.ElementTree as ET
 
 _RDF_NS = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
 _OWL_NS = "http://www.w3.org/2002/07/owl#"
@@ -32,6 +39,13 @@ _ABOUT = f"{{{_RDF_NS}}}about"
 _RESOURCE = f"{{{_RDF_NS}}}resource"
 _OWL_CLASS = f"{{{_OWL_NS}}}Class"
 _RDFS_SUBCLASSOF = f"{{{_RDFS_NS}}}subClassOf"
+_OWL_EQUIVALENT_CLASS = f"{{{_OWL_NS}}}equivalentClass"
+_OWL_INTERSECTION_OF = f"{{{_OWL_NS}}}intersectionOf"
+_RDF_DESCRIPTION = f"{{{_RDF_NS}}}Description"
+
+EDGE_SOURCE_SUBCLASSOF = "subClassOf"
+EDGE_SOURCE_EQUIVALENT_INTERSECTION = "equivalent_intersection"
+_KNOWN_EDGE_SOURCES = (EDGE_SOURCE_SUBCLASSOF, EDGE_SOURCE_EQUIVALENT_INTERSECTION)
 
 _WELL_KNOWN_PREFIXES = {
     "rdf": _RDF_NS,
@@ -65,6 +79,10 @@ class OwlClassRecord:
     Attributes:
         iri: The class's ``rdf:about`` IRI.
         parent_iris: ``rdfs:subClassOf`` target IRIs (direct parents only).
+        intersection_parent_iris: Named members of ``owl:equivalentClass`` ->
+            ``owl:intersectionOf`` definitions (``owl:Restriction`` members
+            excluded). Kept apart from ``parent_iris`` so edge extraction can
+            be switched per ontology via ``edge_sources``.
         texts: ``{predicate_tag: [literal values]}`` for every annotation
             property this class carries, keyed by resolved Clark-notation tag.
         raw_sha256: Hash of a canonical serialization of this class's content,
@@ -73,6 +91,7 @@ class OwlClassRecord:
 
     iri: str
     parent_iris: list[str] = field(default_factory=list)
+    intersection_parent_iris: list[str] = field(default_factory=list)
     texts: dict[str, list[str]] = field(default_factory=dict)
     raw_sha256: str = ""
 
@@ -124,10 +143,12 @@ def parse_owl_ontology(path: str | Path) -> OwlParseResult:
             continue
         iri = elem.get(_ABOUT)
         if not iri:
-            elem.clear()
+            # Anonymous class (e.g. inside equivalentClass): leave it intact. Clearing it
+            # here would erase the intersectionOf its named parent class still has to read.
             continue
 
         parent_iris: list[str] = []
+        intersection_parent_iris: list[str] = []
         texts: dict[str, list[str]] = {}
         for child in elem:
             if child.tag == _RDFS_SUBCLASSOF:
@@ -135,22 +156,62 @@ def parse_owl_ontology(path: str | Path) -> OwlParseResult:
                 if resource:
                     parent_iris.append(resource)
                 continue
+            if child.tag == _OWL_EQUIVALENT_CLASS:
+                # A class may carry several equivalentClass axioms (C27691 has an
+                # intersection and a bare Restriction); only intersections count.
+                intersection_parent_iris.extend(_named_intersection_members(child))
+                continue
             if child.text and child.text.strip():
                 texts.setdefault(child.tag, []).append(child.text.strip())
 
         classes[iri] = OwlClassRecord(
             iri=iri,
             parent_iris=parent_iris,
+            intersection_parent_iris=intersection_parent_iris,
             texts=texts,
-            raw_sha256=_record_sha256(iri, parent_iris, texts),
+            raw_sha256=_record_sha256(iri, parent_iris, texts, intersection_parent_iris),
         )
         elem.clear()
 
     return OwlParseResult(classes=classes, default_ns=default_ns)
 
 
-def _record_sha256(iri: str, parent_iris: list[str], texts: dict[str, list[str]]) -> str:
+def _named_intersection_members(equivalent_class: ET.Element) -> list[str]:
+    """Return IRIs of named classes in an ``owl:equivalentClass`` intersection definition.
+
+    Args:
+        equivalent_class: An ``owl:equivalentClass`` element.
+
+    Returns:
+        ``rdf:about`` IRIs of the ``rdf:Description`` / ``owl:Class`` members of
+        its ``owl:intersectionOf``. Empty if the axiom is not an intersection
+        (e.g. a bare ``owl:Restriction``); ``owl:Restriction`` members are skipped.
+    """
+    members: list[str] = []
+    for expression in equivalent_class:
+        if expression.tag != _OWL_CLASS:
+            continue
+        for intersection in expression:
+            if intersection.tag != _OWL_INTERSECTION_OF:
+                continue
+            for member in intersection:
+                if member.tag in (_RDF_DESCRIPTION, _OWL_CLASS):
+                    about = member.get(_ABOUT)
+                    if about:
+                        members.append(about)
+    return members
+
+
+def _record_sha256(
+    iri: str,
+    parent_iris: list[str],
+    texts: dict[str, list[str]],
+    intersection_parent_iris: list[str] | None = None,
+) -> str:
     payload = {"iri": iri, "parents": sorted(parent_iris), "texts": {k: sorted(v) for k, v in texts.items()}}
+    if intersection_parent_iris:
+        # Added only when present so hashes of classes without it (all of DOID) stay unchanged.
+        payload["intersection_parents"] = sorted(intersection_parent_iris)
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
@@ -189,15 +250,43 @@ def iter_owl_nodes(
         )
 
 
-def iter_owl_edges(result: OwlParseResult, *, graph_key: str, graph_role: str) -> Iterator[EdgeRecord]:
-    """Yield one ``EdgeRecord`` per direct ``rdfs:subClassOf`` pointer to a known class.
+def iter_owl_edges(
+    result: OwlParseResult,
+    *,
+    graph_key: str,
+    graph_role: str,
+    edge_sources: Sequence[str] = (EDGE_SOURCE_SUBCLASSOF,),
+) -> Iterator[EdgeRecord]:
+    """Yield one ``EdgeRecord`` per parent pointer to a known class.
 
     Direction is child -> parent: ``src_id`` is the subclass, ``dst_id`` its
-    ``rdfs:subClassOf`` target, matching how the pointer reads in the source.
-    Pointers to an IRI outside this ontology's own class set are skipped.
+    parent, matching how the pointer reads in the source. Pointers to an IRI
+    outside this ontology's own class set are skipped. Every edge carries
+    ``relation="subClassOf"`` whatever its source, and a parent reachable
+    through more than one source is emitted once.
+
+    Args:
+        result: Parsed ontology.
+        graph_key: Graph key used to build node ids.
+        graph_role: ``graph_1`` or ``graph_2``.
+        edge_sources: Which parent pointers become edges: ``"subClassOf"``
+            (direct ``rdfs:subClassOf``) and/or ``"equivalent_intersection"``
+            (named members of an ``equivalentClass`` intersection).
+
+    Raises:
+        ValueError: If ``edge_sources`` names an unknown source.
     """
+    unknown = set(edge_sources) - set(_KNOWN_EDGE_SOURCES)
+    if unknown:
+        raise ValueError(f"Unknown edge_sources {sorted(unknown)}; expected a subset of {list(_KNOWN_EDGE_SOURCES)}")
+
     for iri, record in result.classes.items():
-        for parent_iri in record.parent_iris:
+        parents: list[str] = []
+        if EDGE_SOURCE_SUBCLASSOF in edge_sources:
+            parents.extend(record.parent_iris)
+        if EDGE_SOURCE_EQUIVALENT_INTERSECTION in edge_sources:
+            parents.extend(record.intersection_parent_iris)
+        for parent_iri in dict.fromkeys(parents):
             if parent_iri not in result.classes:
                 continue
             src_id = make_node_id(graph_key, iri_fragment(iri))

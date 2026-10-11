@@ -97,3 +97,16 @@ A dataset-agnostic loader would need a small per-ontology predicate mapping (lab
 - The intra-graph edges (`rdfs:subClassOf` hierarchies) and text attributes (`rdfs:label`, synonyms, definitions) are both present on both sides, satisfying the two structural requirements MovieGraphBenchmark's `attr_triples_*` files did not (recall: MovieGraphBenchmark's attribute files are not edges at all).
 
 **size and format complexity**: `ncit-doid` requires OWL/XML parsing (e.g. via `rdflib`/`owlready2`/DeepOnto, the two ontologies use different, non-uniform annotation-property vocabularies for text extraction, and the raw files here are full-size (tens of thousands of classes) rather than pre-pruned to a small experiment-ready subset — some ontology pruning or subsetting would likely be needed to keep a short experiment tractable, though the necessary gold-standard files (`refs_equiv/train.tsv`, `test.tsv`, `test.cands.tsv`) are already split and ready to consume as-is regardless of subsetting.
+
+## Update (Sprint 3.0.0): how the adapter reads NCIT's logical axioms
+
+The NCIT logical-definition axioms above are **not** a side note: a class has either direct
+`rdfs:subClassOf` parents or an `owl:equivalentClass` definition, never both, so for ~7,864 classes
+(~half of NCIT) the `equivalentClass` block is the only place their parents are recorded. Only 9,364
+of the raw "16,030 `rdfs:subClassOf`" occurrences are direct parent pointers; the rest are nested in
+restrictions.
+
+The adapter (`edge_sources` in `configs/datasets/ncit_doid.yaml`) now turns the **named members of an
+`owl:equivalentClass` -> `owl:intersectionOf`** into `subClassOf` edges (entailed direct superclasses).
+`owl:Restriction` members are still ignored. Result for NCIT: 23,486 edges, 6 isolated nodes (top-level
+categories). DOID is unchanged (9,388 edges). See [ncit_edge_extraction_analysis.md](ncit_edge_extraction_analysis.md).
