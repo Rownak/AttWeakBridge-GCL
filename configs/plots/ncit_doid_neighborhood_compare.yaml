@@ -1,0 +1,12 @@
+# Sprint 3.2 -- figures for the ncit_doid_neighborhood_compare evaluate experiment, run as:
+#   cga run plot --dataset ncit_doid --config configs/plots/ncit_doid_neighborhood_compare.yaml
+plot:
+  figures:
+    - {figure_id: precision_at_k, kind: line,
+       select: {evaluation_id: neigh, metric_name: normalized_precision_at_k},
+       x: param_value, hue: method_label, facet: [view_id, graph_role]}
+    - {figure_id: silhouette, kind: line,
+       select: {evaluation_id: clusters, metric_name: silhouette},
+       x: param_value, hue: method_label, facet: [graph_role]}
+  loss_curves:
+    enabled: true                     # also plot the gcl_train loss curves

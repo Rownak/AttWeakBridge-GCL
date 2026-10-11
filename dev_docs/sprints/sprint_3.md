@@ -87,7 +87,7 @@ fillers (options C/D) stay out of scope.
       partial) and % with at least one synonym.
 - [x] Spot-check one known class (e.g. NCIT `C3224` Melanoma) in `texts.parquet` for label,
       synonyms, and definition.
-- [ ] **Scale check (done during Phase 3.2).** `training_data` builds dense similarity matrices
+- [x] **Scale check (done during Phase 3.2).** `training_data` builds dense similarity matrices
       (text ≈ 15.8k × 8.5k, graph ≈ 15.8k² ≈ 1 GB fp32). Record peak RAM. Only if it does not fit,
       raise a follow-up for a size-reduction approach; do not build one pre-emptively.
 
@@ -105,19 +105,19 @@ fillers (options C/D) stay out of scope.
 
 SapBERT + DeepWalk, `rank_topk` with `k=5`, GCN then GAT.
 
-- [ ] `training_data` with `training_data.inputs.text_embeddings.embedder_id=hf_mean_pool-sapbert`,
+- [x] `training_data` with `training_data.inputs.text_embeddings.embedder_id=hf_mean_pool-sapbert`,
       `training_data.sampler.name=rank_topk`, `training_data.sampler.k=5`. Record `n_examples`,
       universe size, `held_out` count, and peak RAM (feeds the Phase 3.0 scale check).
-- [ ] `gcl_train` GCN: `gcl_train.inputs.training_data_sampler_id=rank_topk-k5`,
+- [x] `gcl_train` GCN: `gcl_train.inputs.training_data_sampler_id=rank_topk-k5`,
       `gcl_train.model.model_id=gcn-sapbert-deepwalk`, `gcl_train.train.epochs=100`. Then GAT with
       `gcl_train.model.encoder=gat` and `model_id=gat-sapbert-deepwalk`.
-- [ ] Check training sanity: loss decreases in `metrics.jsonl` and no NaNs.
-- [ ] `configs/experiments/ncit_doid_neighborhood_compare.yaml` (modeled on
+- [x] Check training sanity: loss decreases in `metrics.jsonl` and no NaNs.
+- [x] `configs/experiments/ncit_doid_neighborhood_compare.yaml` (modeled on
       `neighborhood_compare.yaml`): methods = `deepwalk`, `sapbert`, the two trained models;
       evaluations = `neighborhood` (`structural_r1`, `structural_r2`, and `textual` with the
       `hf_mean_pool-bert_base` reference) + `cluster_quality`. Same `ks` and `n_clusters` as
       `full_grid_compare.yaml` so numbers stay comparable with Sprint 2.
-- [ ] `configs/plots/ncit_doid_neighborhood_compare.yaml`, then run `evaluate` and `plot`.
+- [x] `configs/plots/ncit_doid_neighborhood_compare.yaml`, then run `evaluate` and `plot`.
 
 ## Phase 3.3 — Sampler sweep (repeat of Phase 2.1)
 
