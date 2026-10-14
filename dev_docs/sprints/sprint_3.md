@@ -139,15 +139,15 @@ SapBERT + DeepWalk, `rank_topk` with `k=5`, GCN then GAT.
 
 ## Phase 3.4 — `alpha` sweep (repeat of Phase 2.2)
 
-- [ ] `configs/sweeps/ncit_doid_alpha.yaml`: `pipeline: gcl_train`, `dataset: ncit_doid`, `alpha`
+- [x] `configs/sweeps/ncit_doid_alpha.yaml`: `pipeline: gcl_train`, `dataset: ncit_doid`, `alpha`
       in `[0.0, 0.25, 0.5, 0.75, 1.0]` zipped with `model_id` (`gcn-alpha0` … `gcn-alpha1`, using the
       `%g` rendering rule from Phase 2.2). `fixed:` sets the Phase 3.3 winner's
       `training_data_sampler_id` and `epochs: 100`.
-- [ ] Dry-check the expansion with `build_config` before launching (Phase 2.2 lesson: the
+- [x] Dry-check the expansion with `build_config` before launching (Phase 2.2 lesson: the
       `model_id` and `sweep_point_id` strings must match).
-- [ ] `configs/experiments/ncit_doid_alpha_sweep_compare.yaml` + plot config. Select on
+- [x] `configs/experiments/ncit_doid_alpha_sweep_compare.yaml` + plot config. Select on
       `mrr_textual`; record `final_loss` but do not select on it (the objective changes with `alpha`).
-- [ ] Ablation readout: does an intermediate `alpha` beat both `alpha=0` (graph-only) and `alpha=1`
+- [x] Ablation readout: does an intermediate `alpha` beat both `alpha=0` (graph-only) and `alpha=1`
       (text-only)?
 
 ## Phase 3.5 — Comparison grid and write-up

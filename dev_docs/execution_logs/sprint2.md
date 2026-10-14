@@ -272,3 +272,45 @@ uv run cga sweep --spec configs/sweeps/alpha.yaml
 uv run cga run evaluate --dataset attack_cwe --experiment alpha_sweep_compare
 uv run cga run plot --dataset attack_cwe --config configs/plots/alpha_sweep_compare.yaml
 ```
+
+### Results (read from the stored evaluation, no re-run)
+
+The sweep and comparison had already been run by the developer: `evaluate` run
+`artifacts/evaluations/attack_cwe/20260921T030509Z-e14863b8` (5 `gcl_run` methods `gcn-alpha{0,0.25,0.5,0.75,1}`,
+GCN + SecRoBERTa + DeepWalk, `rank_topk-k5`, 100 epochs; sweep model runs `20260921T0304xx`). Numbers below
+come from that run's `metrics.parquet`; nothing was recomputed or retrained. `mrr_textual` /
+`precision@10_textual`: `textual` view, mean over `graph_1`/`graph_2`; `silhouette_mean`: mean over both graphs
+and all five `n_clusters`; `structural_r1`: MRR and precision@10 averaged over both graphs (context only).
+Sorted by `mrr_textual`:
+
+| alpha | mrr_textual | precision@10_textual | silhouette_mean | structural_r1 MRR / p@10 |
+|---|---|---|---|---|
+| **1.0 (text-only)** | **0.4565** | **0.2094** | 0.2033 | 0.108 / 0.091 |
+| 0.75 | 0.4494 | 0.1898 | 0.1988 | 0.357 / 0.441 |
+| 0.25 | 0.4187 | 0.1596 | 0.2059 | 0.455 / 0.557 |
+| 0.5 (default) | 0.4163 | 0.1675 | 0.2021 | 0.443 / 0.525 |
+| 0.0 (graph-only) | 0.3959 | 0.1365 | **0.2167** | **0.590 / 0.704** |
+
+`n_examples` is 4,545 for every point (all use `rank_topk-k5`). **`final_loss` is not in the table**: the
+`attack_cwe` model run directories (`models/gcl/attack_cwe/`, git-ignored) are no longer on disk, so each run's
+`metrics.jsonl` could not be read, and the evaluation run does not store training loss. It would need the five
+`gcl_train` runs repeated to recover. It is not a selection metric for `alpha` anyway (see above).
+
+**Selected on `mrr_textual`: `alpha = 1.0`** (text-loss-only), with `alpha=0.75` second. This differs from the
+default `alpha=0.5` (0.4163), which ranks fourth.
+
+Reading:
+- `mrr_textual` and `precision@10_textual` rise with `alpha` toward the text end, while `structural_r1` falls
+  sharply (0.590 -> 0.108 MRR from `alpha=0` to `1`). The textual metric is scored against a `bert_base` reference,
+  so text-heavy training is favoured by construction; the structural views move the other way. Choosing by
+  `mrr_textual` alone therefore picks the text end.
+- An intermediate `alpha` does **not** win on the selection metric here; the best value is the endpoint
+  `alpha=1.0`. The other numbers are not monotonic in `alpha` (0.25 > 0.5 on `mrr_textual`, reverse on p@10).
+- Silhouette is flat (0.199-0.217) and highest for the graph-only end.
+- Possible inconsistency to check before quoting: the Phase 2.1 table gives `rank_topk k=5` (the same
+  configuration as `alpha=0.5`) an `mrr_textual` of 0.4351, but this sweep's `alpha=0.5` point scores 0.4163. The
+  two evaluation runs were done on different days (2026-09-18 vs 2026-09-21; the alpha run's manifest has
+  `git_dirty: true`), and the cause (code or data difference, or run-to-run variation) was not investigated.
+- Single seed; proxy relevance sets, so a relative comparison only.
+
+- The loss is `L = alpha · L_text + (1 − alpha) · L_graph` (from `TrainStep` in `gcl_train/pipeline.py`), so `alpha=0.25` weights the text triplet loss at 25% and the graph triplet loss at 75%. `alpha=0` is graph-only and `alpha=1` is text-only.
