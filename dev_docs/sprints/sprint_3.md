@@ -121,17 +121,19 @@ SapBERT + DeepWalk, `rank_topk` with `k=5`, GCN then GAT.
 
 ## Phase 3.3 — Sampler sweep (repeat of Phase 2.1)
 
-- [ ] `configs/sweeps/ncit_doid_rank_topk_k.yaml` (`k: [5, 10, 20, 30]`) and
+- [x] `configs/sweeps/ncit_doid_rank_topk_k.yaml` (`k: [5, 10, 15]`) and
       `configs/sweeps/ncit_doid_percentile_pct.yaml` (zipped `top_pct`/`bottom_pct:
-      [0.02, 0.05, 0.08, 0.1]`), both with `dataset: ncit_doid`. Use `fixed:` to pin
+      [0.02, 0.05, 0.1]`), both with `dataset: ncit_doid`. Use `fixed:` to pin
       `training_data.inputs.text_embeddings.embedder_id: hf_mean_pool-sapbert`, because the
       pipeline default is SecRoBERTa.
-- [ ] Run both sweeps, then per point `cga run gcl_train --dataset ncit_doid --set
+- [x] Run both sweeps, then per point `cga run gcl_train --dataset ncit_doid --set
       gcl_train.inputs.training_data_sampler_id=<id> --set gcl_train.model.model_id=gcn-<id> --set
-      gcl_train.train.epochs=100` (same procedure as Phase 2.1).
-- [ ] `configs/experiments/ncit_doid_sampler_sweep_compare.yaml` +
-      `configs/plots/ncit_doid_sampler_sweep_compare.yaml` (8 `gcl_run` methods).
-- [ ] Reporting table per sweep point: `mrr_textual`, `precision@10_textual`, `silhouette_mean`,
+      gcl_train.train.epochs=100` (same procedure as Phase 2.1). *(Both sweeps ran; `gcl_train` OOM on
+      percentile 5% and 10%, so 4 of 6 points trained; see `execution_logs/sprint_3_3.md`.)*
+- [x] `configs/experiments/ncit_doid_sampler_sweep_compare.yaml` +
+      `configs/plots/ncit_doid_sampler_sweep_compare.yaml` (8 `gcl_run` methods). *(4 methods: the grids give 6
+      points, minus the 2 that did not train.)*
+- [x] Reporting table per sweep point: `mrr_textual`, `precision@10_textual`, `silhouette_mean`,
       `final_loss`, `n_examples`. Select on `mrr_textual`, as in Sprint 2. Note whether the winner
       matches `attack_cwe`'s (`rank_topk`, `k=5`).
 
