@@ -10,6 +10,7 @@ training_data:
     k: 30
     top_pct: 0.04                   # percentile sampler
     bottom_pct: 0.04
+    negatives_per_positive: 5       # supervised sampler (text negatives per gold pair)
 
 # No split configuration here: the node partition is drawn once by ingest
 # (configs/pipelines/ingest.yaml, split.fractions/seed) and read from

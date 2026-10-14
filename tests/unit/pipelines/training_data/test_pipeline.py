@@ -300,9 +300,44 @@ def test_supervised_split_keeps_test_alignment_out_of_train_examples(tmp_path):
     anchors = examples.column("anchor_id").to_pylist()
     splits = examples.column("split").to_pylist()
     assert "ncit:1" not in anchors  # test-split alignment never became an example at all
-    assert anchors == ["ncit:2"]
-    # ncit:2's own node split is "train" (default), so its example inherits "train".
-    assert splits == ["train"]
+    # ncit:2 has 2 eligible text negatives (doid:3, doid:4) and 2 other graph_1 nodes.
+    assert anchors == ["ncit:2", "ncit:2"]
+    assert set(examples.column("text_pos_id").to_pylist()) == {"doid:2"}
+    # ncit:2's own node split is "train" (default), so its examples inherit "train".
+    assert splits == ["train", "train"]
+
+
+def test_supervised_examples_avoid_test_endpoints_and_gold_negatives(tmp_path):
+    config = _build_config(tmp_path, sampler_name="supervised", sampler_extra={"negatives_per_positive": 5})
+    alignment_rows = [
+        {"node_1_id": "ncit:1", "node_2_id": "doid:1", "split": "test"},
+        {"node_1_id": "ncit:2", "node_2_id": "doid:2", "split": "train"},
+        {"node_1_id": "ncit:2", "node_2_id": "doid:3", "split": "train"},
+        # Shares a test endpoint (doid:1): must be skipped.
+        {"node_1_id": "ncit:3", "node_2_id": "doid:1", "split": "train"},
+    ]
+    _setup_stores(config, tmp_path, alignment_rows=alignment_rows)
+
+    ctx = _run_training_data(config, tmp_path)
+
+    examples = read_examples(ctx.run_dir / "examples.parquet")
+    test_endpoints = {"ncit:1", "doid:1"}
+    for column in ("anchor_id", "text_pos_id", "text_neg_id", "graph_pos_id", "graph_neg_id"):
+        assert not test_endpoints & set(examples.column(column).to_pylist())
+    gold = {(r["node_1_id"], r["node_2_id"]) for r in alignment_rows}
+    for anchor_id, text_neg_id in zip(
+        examples.column("anchor_id").to_pylist(), examples.column("text_neg_id").to_pylist()
+    ):
+        assert text_neg_id.startswith("doid:")
+        assert (anchor_id, text_neg_id) not in gold
+    # ncit:2's only non-gold, non-held-out DOID node is doid:4: one row per positive.
+    assert sorted(examples.column("text_pos_id").to_pylist()) == ["doid:2", "doid:3"]
+    assert set(examples.column("text_neg_id").to_pylist()) == {"doid:4"}
+
+    stats = read_json(ctx.run_dir / "stats.json")
+    assert stats["n_gold_train_pairs"] == 3
+    assert stats["n_gold_train_pairs_used"] == 2
+    assert stats["n_gold_train_pairs_skipped"] == 1
 
 
 def test_supervised_sampler_excludes_pairs_with_a_val_split_endpoint(tmp_path):
@@ -335,6 +370,10 @@ def test_build_sampler_id_percentile_includes_both_pcts():
         build_sampler_id({"name": "percentile", "top_pct": 0.04, "bottom_pct": 0.08})
         == "percentile-top_pct0.04-bottom_pct0.08"
     )
+
+
+def test_build_sampler_id_supervised_includes_negatives_per_positive():
+    assert build_sampler_id({"name": "supervised", "negatives_per_positive": 5}) == "supervised-negatives_per_positive5"
 
 
 def test_build_sampler_id_respects_explicit_override():

@@ -11,9 +11,10 @@ assertion that no held-out node id appears in ``examples.parquet``).
 
 ``held_out`` nodes are never dropped from ``universe.parquet`` — ``gcl_train``
 and ``evaluate`` still need their embeddings — they are simply never eligible
-to be drawn as an anchor/positive/negative by the unsupervised samplers, which
-is what keeps a node reserved for evaluating the trained model out of the
-examples that trained it. The node partition itself (``split``) is drawn once
+to be drawn as an anchor/positive/negative by any sampler, which is what keeps
+a node reserved for evaluating the trained model out of the examples that
+trained it. The ``supervised`` sampler additionally receives every gold
+alignment row so it can exclude gold targets of all splits from its negatives. The node partition itself (``split``) is drawn once
 by ``ingest`` (§5.1.1), identically for every dataset; this pipeline never
 computes its own split.
 """
@@ -38,7 +39,7 @@ from cga.data.aligned import AlignedMatrix, NodeUniverse
 from cga.data.example_store import write_examples
 from cga.data.graph_store import read_alignments, read_nodes, read_splits
 from cga.data.schemas import EXAMPLES_SCHEMA
-from cga.pipelines.training_data.samplers import ExampleTuple
+from cga.pipelines.training_data.samplers import ExampleTuple, supervised_positives
 from cga.pipelines.training_data.similarity import (
     SimilarityMatrix,
     compute_graph_similarity,
@@ -56,6 +57,7 @@ _ID_COLUMNS = ["anchor_id", "text_pos_id", "text_neg_id", "graph_pos_id", "graph
 _SAMPLER_ID_PARAMS = {
     "rank_topk": ("k",),
     "percentile": ("top_pct", "bottom_pct"),
+    "supervised": ("negatives_per_positive",),
 }
 
 
@@ -96,6 +98,7 @@ class _TrainingDataState:
         self.graph_g2: SimilarityMatrix | None = None
         self.sampled_examples: list[ExampleTuple] = []
         self.sampler_name: str = ""
+        self.sampler_stats: dict[str, int] = {}
         self.examples_table: pa.Table | None = None
         self.output_dir: Path | None = None
 
@@ -251,11 +254,12 @@ class SampleStep:
         alignments = None
         if sampler_name == "supervised":
             assert state.alignments_table is not None
-            held_out_by_node = dict(zip(state.universe.node_ids, state.universe.held_out))
-            # A supervised positive is only used when both endpoints are
-            # non-held-out (i.e. in the train split): held_out already
-            # excludes val/test-split nodes and test-split alignment pairs
-            # (§5.3 step 1), so this is the single check needed here.
+            # Pass the full gold set (every split), unfiltered: the sampler
+            # needs test pairs to keep their targets out of the negatives.
+            # Positives are still train-only and restricted to the
+            # non-held-out matrices, where held_out already covers val/test
+            # node splits and test-pair endpoints (§5.3 step 1), so a test
+            # endpoint can never enter an example.
             alignments = [
                 {"node_1_id": n1, "node_2_id": n2, "split": split}
                 for n1, n2, split in zip(
@@ -263,8 +267,13 @@ class SampleStep:
                     state.alignments_table.column("node_2_id").to_pylist(),
                     state.alignments_table.column("split").to_pylist(),
                 )
-                if not held_out_by_node.get(n1, True) and not held_out_by_node.get(n2, True)
             ]
+            used, n_skipped = supervised_positives(alignments, state.text_g1_g2, state.graph_g1)
+            state.sampler_stats = {
+                "n_gold_train_pairs": sum(1 for row in alignments if row["split"] == "train"),
+                "n_gold_train_pairs_used": len(used),
+                "n_gold_train_pairs_skipped": n_skipped,
+            }
 
         examples = sampler_fn(
             text_g1_g2=state.text_g1_g2,
@@ -359,6 +368,7 @@ class ValidateAndManifestStep:
             "sampler": state.sampler_name,
             "n_examples": state.examples_table.num_rows,
             "n_examples_by_split": dict(split_counts),
+            **state.sampler_stats,
         }
         stats_path = state.output_dir / "stats.json"
         write_json(stats, stats_path)

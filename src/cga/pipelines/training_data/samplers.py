@@ -2,9 +2,10 @@
 
 Every sampler here only ever sees the non-``held_out`` similarity matrices
 built by :mod:`cga.pipelines.training_data.similarity`, so a held-out
-(alignment-test) node can never be drawn as an anchor, positive, or negative by
-``rank_topk``/``percentile`` — the leakage-prevention property is structural,
-not a filter applied after the fact.
+(alignment-test) node can never be drawn as an anchor, positive, or negative —
+the leakage-prevention property is structural, not a filter applied after the
+fact. ``supervised`` additionally receives the full gold alignment set (all
+splits) so it can keep every gold target, train or test, out of its negatives.
 
 Each sampler returns a list of ``(anchor_id, text_pos_id, text_neg_id,
 graph_pos_id, graph_neg_id)`` tuples; the pipeline attaches ``example_id``,
@@ -14,6 +15,7 @@ graph_pos_id, graph_neg_id)`` tuples; the pipeline attaches ``example_id``,
 from __future__ import annotations
 
 import random
+from collections.abc import Collection
 from typing import Protocol
 
 import numpy as np
@@ -39,15 +41,37 @@ class Sampler(Protocol):
     ) -> list[ExampleTuple]: ...
 
 
-def _topk_bottomk_indices(row: np.ndarray, k: int, *, exclude_index: int | None = None) -> tuple[np.ndarray, np.ndarray]:
+def _topk_bottomk_indices(
+    row: np.ndarray,
+    k: int,
+    *,
+    exclude_index: int | None = None,
+    exclude_indices: Collection[int] | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
     """Return (most-similar-k, least-similar-k) column indices for one similarity row, by rank.
 
-    ``exclude_index`` drops one column before ranking — used to remove a
-    within-graph anchor's self-similarity (always 1.0, always rank-0) from its
-    own top-k, so an anchor is never paired with itself as a "positive".
+    Args:
+        row: One row of a similarity matrix.
+        k: Number of indices to return from each end (capped at the number of
+            candidate columns).
+        exclude_index: One column dropped before ranking — used to remove a
+            within-graph anchor's self-similarity (always 1.0, always rank-0)
+            from its own top-k, so an anchor is never paired with itself as a
+            "positive".
+        exclude_indices: Further columns dropped before ranking — used by the
+            ``supervised`` sampler to keep an anchor's gold targets out of its
+            text negatives. Combined with ``exclude_index``.
+
+    Returns:
+        ``(top, bottom)``: ``top`` in descending similarity, ``bottom`` in
+        ascending similarity; ties keep column order (stable sort).
     """
+    excluded = set(exclude_indices or ())
     if exclude_index is not None:
-        keep = np.arange(len(row)) != exclude_index
+        excluded.add(exclude_index)
+    if excluded:
+        keep = np.ones(len(row), dtype=bool)
+        keep[[i for i in excluded if 0 <= i < len(row)]] = False
         candidate_positions = np.flatnonzero(keep)
         order = candidate_positions[np.argsort(row[keep], kind="stable")]
     else:
@@ -260,6 +284,46 @@ def percentile_sampler(
     return examples
 
 
+def supervised_positives(
+    alignments: list[dict], text_g1_g2: SimilarityMatrix, graph_g1: SimilarityMatrix
+) -> tuple[list[tuple[str, str]], int]:
+    """Return the usable gold train pairs and the number of train rows skipped.
+
+    A ``train``-split row ``(node_1_id, node_2_id)`` is usable when the NCIT
+    anchor is a row of both ``text_g1_g2`` and ``graph_g1`` and the target is a
+    column of ``text_g1_g2``, i.e. neither endpoint is held out or outside the
+    embedding universe. Duplicate pairs are kept once, in first-seen order, so
+    the same pair never yields duplicate ``example_id``s. Shared by the sampler
+    and ``training_data``'s ``stats.json`` so both count the same pairs.
+
+    Args:
+        alignments: Gold alignment rows (``node_1_id``, ``node_2_id``, ``split``).
+        text_g1_g2: Cross-graph text similarity over non-held-out nodes.
+        graph_g1: Within-``graph_1`` structural similarity over non-held-out nodes.
+
+    Returns:
+        ``(pairs, n_skipped)`` where ``n_skipped`` counts ``train`` rows that
+        were not usable (duplicates are not counted as skipped).
+    """
+    text_rows = set(text_g1_g2.row_ids)
+    text_cols = set(text_g1_g2.col_ids)
+    graph_rows = set(graph_g1.row_ids)
+    pairs: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    n_skipped = 0
+    for row in alignments:
+        if row.get("split") != "train":
+            continue
+        pair = (row["node_1_id"], row["node_2_id"])
+        if pair[0] not in text_rows or pair[0] not in graph_rows or pair[1] not in text_cols:
+            n_skipped += 1
+            continue
+        if pair not in seen:
+            seen.add(pair)
+            pairs.append(pair)
+    return pairs, n_skipped
+
+
 @samplers.register("supervised")
 def supervised_sampler(
     *,
@@ -270,48 +334,60 @@ def supervised_sampler(
     seed: int,
     alignments: list[dict] | None = None,
 ) -> list[ExampleTuple]:
-    """Positives from ``alignments.parquet``'s gold pairs; negatives sampled from the non-positive pool.
+    """Gold ``train`` pairs as text positives; rank-based text negatives and graph pos/neg.
 
-    For each gold ``(node_1_id, node_2_id)`` alignment pair (any split — the
-    caller is responsible for keeping ``test``-split pairs out of what gets
-    written as a training example; see ``training_data.pipeline``), the
-    positive text pair is the alignment pair itself; the negative text pair
-    reuses the anchor with a uniformly random *other* ``graph_2`` node drawn
-    from ``text_g1_g2.col_ids`` (excluding the true positive). Graph
-    positive/negative reuse the same random-negative construction within each
-    anchor's own graph, since ``alignments.parquet`` carries no structural
-    ground truth. No-ops (returns ``[]``) when ``alignments`` is empty.
+    ``alignments`` must be the **full** gold set (every split): positives are
+    taken from ``train`` rows only (see :func:`supervised_positives`), while
+    the gold targets of **every** split are excluded from negatives. For each
+    positive ``(a, p)``, with ``n = negatives_per_positive`` (default 5):
+
+    - ``text_neg_id``: the ``n`` least text-similar ``graph_2`` columns of
+      ``a``'s ``text_g1_g2`` row, after dropping all of ``a``'s gold targets.
+      Held-out targets are already absent from the matrix.
+    - ``graph_pos_id``/``graph_neg_id``: the j-th most/least structurally
+      similar other ``graph_1`` node of ``a`` (self excluded), the same rule
+      as ``rank_topk``, so the graph-view loss sees a real structural signal.
+
+    Negative j is zipped with structural rank j, giving one example row per
+    negative. Only NCIT (``graph_1``) anchors are used because the gold files
+    are NCIT->DOID. Sampling is deterministic; ``seed`` only drives the final
+    shuffle. No-ops (returns ``[]``) when ``alignments`` is empty.
     """
     if not alignments:
         return []
 
-    rng = random.Random(seed)
-    text_col_ids = text_g1_g2.col_ids
-    text_col_set = set(text_col_ids)
-    graph_g1_ids = graph_g1.col_ids
-    graph_g2_ids = graph_g2.col_ids
+    n = config.get("negatives_per_positive", 5)
+    positives, _ = supervised_positives(alignments, text_g1_g2, graph_g1)
+
+    gold_targets: dict[str, set[str]] = {}
+    for row in alignments:
+        gold_targets.setdefault(row["node_1_id"], set()).add(row["node_2_id"])
+
+    text_row_of = {nid: i for i, nid in enumerate(text_g1_g2.row_ids)}
+    text_col_of = {nid: i for i, nid in enumerate(text_g1_g2.col_ids)}
+    graph_row_of = {nid: i for i, nid in enumerate(graph_g1.row_ids)}
+    graph_col_of = {nid: i for i, nid in enumerate(graph_g1.col_ids)}
 
     examples: list[ExampleTuple] = []
-    for pair in alignments:
-        anchor_id = pair["node_1_id"]
-        pos_id = pair["node_2_id"]
-        if anchor_id not in set(text_g1_g2.row_ids) or pos_id not in text_col_set:
-            continue
+    for anchor_id, pos_id in positives:
+        gold_cols = [text_col_of[t] for t in gold_targets[anchor_id] if t in text_col_of]
+        _, text_bottom = _topk_bottomk_indices(
+            text_g1_g2.values[text_row_of[anchor_id]], n, exclude_indices=gold_cols
+        )
+        graph_top, graph_bottom = _topk_bottomk_indices(
+            graph_g1.values[graph_row_of[anchor_id]], n, exclude_index=graph_col_of.get(anchor_id)
+        )
+        for j in range(min(len(text_bottom), len(graph_top))):
+            examples.append(
+                (
+                    anchor_id,
+                    pos_id,
+                    text_g1_g2.col_ids[text_bottom[j]],
+                    graph_g1.col_ids[graph_top[j]],
+                    graph_g1.col_ids[graph_bottom[j]],
+                )
+            )
 
-        neg_candidates = [nid for nid in text_col_ids if nid != pos_id]
-        if not neg_candidates:
-            continue
-        text_neg_id = neg_candidates[rng.randrange(0, len(neg_candidates))]
-
-        graph_pos_candidates = [nid for nid in graph_g1_ids if nid != anchor_id]
-        if not graph_pos_candidates:
-            continue
-        graph_pos_id = graph_pos_candidates[rng.randrange(0, len(graph_pos_candidates))]
-        graph_neg_candidates = [nid for nid in graph_g1_ids if nid not in (anchor_id, graph_pos_id)]
-        if not graph_neg_candidates:
-            graph_neg_candidates = graph_pos_candidates
-        graph_neg_id = graph_neg_candidates[rng.randrange(0, len(graph_neg_candidates))]
-
-        examples.append((anchor_id, pos_id, text_neg_id, graph_pos_id, graph_neg_id))
-
+    rng = random.Random(seed)
+    rng.shuffle(examples)
     return examples
