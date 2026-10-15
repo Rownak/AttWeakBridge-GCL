@@ -111,7 +111,7 @@ def test_residual_adapter_has_no_trainable_params_and_rejects_bad_config():
     model = build_residual_adapter_encoder(lam=0.5)
     assert sum(p.numel() for p in model.parameters()) == 0
     with pytest.raises(ValueError):
-        build_residual_adapter_encoder(adapter="mlp")
+        build_residual_adapter_encoder(adapter="relational")
     with pytest.raises(ValueError):
         build_residual_adapter_encoder(adapter="nope")
     with pytest.raises(ValueError):
@@ -120,3 +120,34 @@ def test_residual_adapter_has_no_trainable_params_and_rejects_bad_config():
         build_residual_adapter_encoder(lam=0.5, directional=True)(
             torch.eye(2), torch.eye(2), torch.empty((2, 0), dtype=torch.long)
         )
+
+
+def test_mlp_adapter_shapes_params_and_small_last_layer_init():
+    model = build_residual_adapter_encoder(adapter="mlp", lam=0.25, adapter_dim=16, text_dim=8)
+    x = torch.randn(5, 8)
+    z = model(x, x, torch.empty((2, 0), dtype=torch.long))
+    assert z.shape == (5, 8 + 16)
+    assert torch.allclose(z[:, :8].norm(dim=1), torch.ones(5), atol=1e-5)  # SapBERT block untouched (unit)
+    assert torch.allclose(z[:, 8:].norm(dim=1), torch.full((5,), 0.25**0.5), atol=1e-5)
+    last = model.mlp[-1]
+    assert last.weight.std().item() < 5e-3 and torch.count_nonzero(last.bias) == 0
+    assert sum(p.numel() for p in model.parameters() if p.requires_grad) > 0
+
+
+def test_mlp_adapter_ignores_edges_and_dropout_only_in_train_mode():
+    model = build_residual_adapter_encoder(adapter="mlp", lam=1.0, adapter_dim=16, text_dim=8, adapter_dropout=0.5)
+    x = torch.randn(6, 8)
+    no_edges = torch.empty((2, 0), dtype=torch.long)
+    some_edges = torch.tensor([[0, 1], [1, 0]])
+    model.eval()
+    assert torch.equal(model(x, x, no_edges), model(x, x, some_edges, torch.tensor([0, 1])))
+    assert torch.equal(model(x, x, no_edges), model(x, x, no_edges))  # deterministic in eval
+
+
+def test_mlp_adapter_lambda_zero_gives_zero_gradient_on_adapter():
+    model = build_residual_adapter_encoder(adapter="mlp", lam=0.0, adapter_dim=16, text_dim=8)
+    x = torch.randn(6, 8)
+    z = model(x, x, torch.empty((2, 0), dtype=torch.long))
+    z.pow(2).sum().backward()
+    assert all(p.grad is None or torch.count_nonzero(p.grad) == 0 for p in model.parameters())
+    assert torch.isfinite(z).all()

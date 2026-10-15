@@ -91,8 +91,13 @@ class DualEncoder(nn.Module):
         self.fc3 = nn.Linear(2 * out_channels + 2 * struct_dim, hidden_dim)
 
     def forward(
-        self, text_emb: torch.Tensor, struct_emb: torch.Tensor, edge_index: torch.Tensor
+        self,
+        text_emb: torch.Tensor,
+        struct_emb: torch.Tensor,
+        edge_index: torch.Tensor,
+        edge_type: torch.Tensor | None = None,
     ) -> torch.Tensor:
+        # edge_type is accepted for interface parity with ResidualAdapterEncoder and ignored here.
         graph_emb1 = self.graph_model1(text_emb, edge_index)
         graph_emb2 = self.graph_model2(struct_emb, edge_index)
         text_proj = self.fc1(text_emb)
@@ -195,32 +200,59 @@ class ResidualAdapterEncoder(nn.Module):
     beside :class:`DualEncoder`, selected by ``gcl_train.model.encoder: residual_adapter``;
     ``gold_alignment`` scores the exported ``z`` unchanged.
 
-    Only ``adapter="neighbor_mean"`` (parameter-free) is implemented; ``mlp`` and
-    ``relational`` are reserved for later phases and rejected here.
+    Adapters:
+        ``neighbor_mean``: parameter-free, ``h`` = mean of ``x̂`` over graph neighbours (Phase 5.1).
+        ``mlp``: trainable, **no graph input**, ``h = MLP(x̂)`` with
+        ``Linear(d, a) -> ReLU -> LayerNorm(a) -> Dropout -> Linear(a, a)`` (Phase 5.2). The last
+        layer starts at std 1e-3 / zero bias, so ``h`` is a small, smooth function of ``x̂`` at
+        initialization (``normalize(h)`` is still unit length, so ``z`` is SapBERT plus a
+        ``sqrt(lambda)``-scaled, input-dependent block, not a small perturbation).
+        ``relational``: reserved for Phase 5.3 and rejected here.
 
     Args:
         adapter: ``neighbor_mean``, ``mlp`` or ``relational``.
         lam: Fixed global residual weight ``lambda`` (``>= 0``).
-        adapter_dim: Hidden width of the trainable adapters (unused by ``neighbor_mean``).
-        directional: When true, ``h = [mean parents ; mean children]`` instead of
-            the undirected neighbour mean.
+        adapter_dim: Hidden/output width ``a`` of the ``mlp`` adapter (unused by ``neighbor_mean``).
+        directional: When true, ``neighbor_mean`` uses ``h = [mean parents ; mean children]``
+            instead of the undirected neighbour mean.
+        text_dim: Width of the text input ``x̂`` (needed to size the ``mlp``).
+        adapter_dropout: Dropout inside the ``mlp`` adapter (train mode only).
 
     Raises:
         ValueError: On an unknown adapter, a not-yet-implemented adapter, or negative ``lam``.
     """
 
-    def __init__(self, *, adapter: str, lam: float, adapter_dim: int = 256, directional: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        adapter: str,
+        lam: float,
+        adapter_dim: int = 256,
+        directional: bool = False,
+        text_dim: int = 768,
+        adapter_dropout: float = 0.2,
+    ) -> None:
         super().__init__()
         if adapter not in _ADAPTERS:
             raise ValueError(f"Unknown adapter '{adapter}'; expected one of {list(_ADAPTERS)}")
-        if adapter != "neighbor_mean":
-            raise ValueError(f"adapter '{adapter}' is not implemented yet (only 'neighbor_mean')")
+        if adapter == "relational":
+            raise ValueError("adapter 'relational' is not implemented yet (Phase 5.3)")
         if lam < 0:
             raise ValueError(f"lambda must be >= 0, got {lam}")
         self.adapter = adapter
         self.lam = float(lam)
         self.adapter_dim = adapter_dim
         self.directional = directional
+        if adapter == "mlp":
+            self.mlp = nn.Sequential(
+                nn.Linear(text_dim, adapter_dim),
+                nn.ReLU(),
+                nn.LayerNorm(adapter_dim),
+                nn.Dropout(adapter_dropout),
+                nn.Linear(adapter_dim, adapter_dim),
+            )
+            nn.init.normal_(self.mlp[-1].weight, std=1e-3)
+            nn.init.zeros_(self.mlp[-1].bias)
 
     def forward(
         self,
@@ -240,12 +272,15 @@ class ResidualAdapterEncoder(nn.Module):
                 1 = reversed). Required when ``directional``.
 
         Returns:
-            ``(n, 768 + d_h)`` with ``d_h`` = 768 (undirected) or 1536 (directional).
+            ``(n, d + d_h)`` with ``d_h`` = ``adapter_dim`` (``mlp``), ``d`` (undirected
+            ``neighbor_mean``) or ``2d`` (directional); ``d`` is the text width.
 
         Raises:
             ValueError: If ``directional`` and ``edge_type`` is ``None``.
         """
         x_hat = _unit(text_emb.detach())
+        if self.adapter == "mlp":
+            return torch.cat([x_hat, (self.lam**0.5) * _unit(self.mlp(x_hat))], dim=1)
         if self.directional:
             if edge_type is None:
                 raise ValueError("directional neighbor_mean needs edge_type")
@@ -258,7 +293,20 @@ class ResidualAdapterEncoder(nn.Module):
 
 
 def build_residual_adapter_encoder(
-    *, adapter: str = "neighbor_mean", lam: float = 0.25, adapter_dim: int = 256, directional: bool = False
+    *,
+    adapter: str = "neighbor_mean",
+    lam: float = 0.25,
+    adapter_dim: int = 256,
+    directional: bool = False,
+    text_dim: int = 768,
+    adapter_dropout: float = 0.2,
 ) -> ResidualAdapterEncoder:
     """Construct a :class:`ResidualAdapterEncoder` (see its docstring for the arguments)."""
-    return ResidualAdapterEncoder(adapter=adapter, lam=lam, adapter_dim=adapter_dim, directional=directional)
+    return ResidualAdapterEncoder(
+        adapter=adapter,
+        lam=lam,
+        adapter_dim=adapter_dim,
+        directional=directional,
+        text_dim=text_dim,
+        adapter_dropout=adapter_dropout,
+    )

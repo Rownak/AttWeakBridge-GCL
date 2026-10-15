@@ -23,7 +23,8 @@ import torch
 
 from cga.core.io import write_json
 from cga.core.registry import losses as loss_registry
-from cga.pipelines.gcl_train.models import DualEncoder
+from cga.pipelines.gcl_train.losses import FullSoftmaxData
+from cga.pipelines.gcl_train.models import DualEncoder, ResidualAdapterEncoder
 
 
 @dataclass
@@ -50,7 +51,7 @@ class ExampleTensors:
 
 def train_model(
     *,
-    model: DualEncoder,
+    model: DualEncoder | ResidualAdapterEncoder,
     text_features: torch.Tensor,
     struct_features: torch.Tensor,
     edge_index: torch.Tensor,
@@ -66,6 +67,8 @@ def train_model(
     metrics_path: Path,
     logger: Any,
     log_every: int = 10,
+    edge_type: torch.Tensor | None = None,
+    full_data: FullSoftmaxData | None = None,
 ) -> torch.Tensor:
     """Run the full-batch training loop, writing per-epoch metrics and periodic checkpoints.
 
@@ -92,11 +95,17 @@ def train_model(
             (``metrics.jsonl``).
         logger: Logger for per-``log_every``-epoch progress lines.
         log_every: How often (in epochs) to log progress.
+        edge_type: Optional ``(n_edges,)`` edge types forwarded to the model.
+        full_data: Required when ``loss_name == "infonce_full"``. That loss replaces both
+            views (``alpha`` is ignored); ``metrics.jsonl`` then records the forward term as
+            ``loss_text`` and the reverse term as ``loss_graph``.
 
     Returns:
         The final fused embeddings for every universe row, detached.
     """
     loss_fn = loss_registry.get(loss_name)
+    if loss_name == "infonce_full" and full_data is None:
+        raise ValueError("loss 'infonce_full' needs full_data")
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
     with metrics_path.open("w", encoding="utf-8") as metrics_file:
@@ -105,21 +114,24 @@ def train_model(
             model.train()
             optimizer.zero_grad()
 
-            embeddings = model(text_features, struct_features, edge_index)
+            embeddings = model(text_features, struct_features, edge_index, edge_type)
 
-            loss_text = loss_fn(
-                embeddings[train_examples.anchor],
-                embeddings[train_examples.text_pos],
-                embeddings[train_examples.text_neg],
-                **loss_kwargs,
-            )
-            loss_graph = loss_fn(
-                embeddings[train_examples.anchor],
-                embeddings[train_examples.graph_pos],
-                embeddings[train_examples.graph_neg],
-                **loss_kwargs,
-            )
-            loss = alpha * loss_text + (1 - alpha) * loss_graph
+            if loss_name == "infonce_full":
+                loss, loss_text, loss_graph = loss_fn(embeddings, full_data, **loss_kwargs)
+            else:
+                loss_text = loss_fn(
+                    embeddings[train_examples.anchor],
+                    embeddings[train_examples.text_pos],
+                    embeddings[train_examples.text_neg],
+                    **loss_kwargs,
+                )
+                loss_graph = loss_fn(
+                    embeddings[train_examples.anchor],
+                    embeddings[train_examples.graph_pos],
+                    embeddings[train_examples.graph_neg],
+                    **loss_kwargs,
+                )
+                loss = alpha * loss_text + (1 - alpha) * loss_graph
 
             loss.backward()
             optimizer.step()
@@ -152,7 +164,7 @@ def train_model(
 
     model.eval()
     with torch.no_grad():
-        final_embeddings = model(text_features, struct_features, edge_index)
+        final_embeddings = model(text_features, struct_features, edge_index, edge_type)
     return final_embeddings.detach()
 
 
@@ -163,7 +175,7 @@ def _json_line(record: dict[str, Any]) -> str:
 
 
 def _write_checkpoint(
-    model: DualEncoder, optimizer: torch.optim.Optimizer, epoch: int, universe_sha256: str, checkpoint_dir: Path
+    model: torch.nn.Module, optimizer: torch.optim.Optimizer, epoch: int, universe_sha256: str, checkpoint_dir: Path
 ) -> None:
     torch.save(
         {

@@ -33,8 +33,9 @@ from cga.core.registry import pipelines
 from cga.core.run import RunContext
 from cga.data.aligned import AlignedMatrix, NodeUniverse
 from cga.data.example_store import read_examples
-from cga.data.graph_store import read_edges
-from cga.pipelines.gcl_train import losses as _losses  # noqa: F401  (registers triplet/infonce)
+from cga.data.graph_store import read_alignments, read_edges
+from cga.pipelines.gcl_train import losses as _losses  # noqa: F401  (registers triplet/infonce/infonce_full)
+from cga.pipelines.gcl_train.losses import build_full_softmax_data
 from cga.pipelines.gcl_train.models import build_dual_encoder, build_residual_adapter_encoder
 from cga.pipelines.gcl_train.trainer import ExampleTensors, sha256_of_universe, train_model
 
@@ -64,6 +65,7 @@ class _GclTrainState:
         self.edge_index: torch.Tensor | None = None
         self.edge_type: torch.Tensor | None = None
         self.n_trainable_params: int = 0
+        self.gold_pairs: list[tuple[int, int]] = []
         self.train_examples: ExampleTensors | None = None
         self.n_examples_total: int = 0
         self.n_examples_train: int = 0
@@ -177,6 +179,18 @@ class LoadStep:
 
         state.edge_type = torch.tensor(edge_types, dtype=torch.long, device=device)
 
+        if cfg["loss"]["name"] == "infonce_full":
+            # Gold alignments of every split, used only to mask valid alternatives out of the softmax.
+            # Held-out endpoints are already outside the candidate sets; pairs outside the universe are skipped.
+            alignments = read_alignments(ingest_dir / "alignments.parquet")
+            state.gold_pairs = [
+                (row_of[n1], row_of[n2])
+                for n1, n2 in zip(
+                    alignments.column("node_1_id").to_pylist(), alignments.column("node_2_id").to_pylist()
+                )
+                if n1 in row_of and n2 in row_of
+            ]
+
         examples_table = read_examples(training_data_dir / "examples.parquet")
         universe_ids = set(universe.node_ids)
         for column in _ID_COLUMNS:
@@ -250,8 +264,15 @@ class TrainStep:
             loss_kwargs = {"margin": loss_cfg.get("margin", 1.0)}
         elif loss_name == "infonce":
             loss_kwargs = {"temperature": loss_cfg.get("temperature", 0.1)}
+        elif loss_name == "infonce_full":
+            loss_kwargs = {
+                "temperature": loss_cfg.get("temperature", 0.05),
+                "reverse_weight": loss_cfg.get("reverse_weight", 0.5),
+            }
         else:
-            raise ConfigError(f"Unknown gcl_train.loss.name '{loss_name}'; expected 'triplet' or 'infonce'")
+            raise ConfigError(
+                f"Unknown gcl_train.loss.name '{loss_name}'; expected 'triplet', 'infonce' or 'infonce_full'"
+            )
 
         if model_cfg.get("encoder", "gcn") == "residual_adapter":
             model = build_residual_adapter_encoder(
@@ -259,6 +280,8 @@ class TrainStep:
                 lam=model_cfg.get("lambda", 0.25),
                 adapter_dim=model_cfg.get("adapter_dim", 256),
                 directional=model_cfg.get("directional", False),
+                text_dim=state.text_features.shape[1],
+                adapter_dropout=model_cfg.get("adapter_dropout", 0.2),
             ).to(ctx.device)
         else:
             model = build_dual_encoder(
@@ -292,6 +315,23 @@ class TrainStep:
 
         universe_sha256 = sha256_of_universe(state.universe.node_ids)
 
+        full_data = None
+        if loss_name == "infonce_full":
+            examples = state.train_examples
+            full_data = build_full_softmax_data(
+                list(zip(examples.anchor.tolist(), examples.text_pos.tolist())),
+                graph_roles=state.universe.graph_roles,
+                held_out=state.universe.held_out,
+                gold_pairs=state.gold_pairs,
+                device=ctx.device,
+            )
+            ctx.logger.info(
+                "train: infonce_full with %d positive pairs, %d forward / %d reverse candidates",
+                len(full_data.anchor),
+                len(full_data.cand_fwd),
+                len(full_data.cand_rev),
+            )
+
         final_embeddings = train_model(
             model=model,
             text_features=state.text_features,
@@ -309,6 +349,8 @@ class TrainStep:
             metrics_path=ctx.run_dir / "metrics.jsonl",
             logger=ctx.logger,
             log_every=train_cfg.get("log_every", 10),
+            edge_type=state.edge_type,
+            full_data=full_data,
         )
         state.final_embeddings = final_embeddings
 

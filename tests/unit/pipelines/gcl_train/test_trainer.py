@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from pathlib import Path
 
 import pytest
@@ -107,3 +108,46 @@ def test_train_model_writes_one_metrics_line_per_epoch(tmp_path: Path) -> None:
     # checkpoint_every=0 still checkpoints the final epoch.
     assert (tmp_path / "checkpoints" / "epoch_0005.pt").is_file()
     assert not (tmp_path / "checkpoints" / "epoch_0001.pt").is_file()
+
+
+def test_train_model_infonce_full_decreases_loss_and_requires_full_data(tmp_path: Path) -> None:
+    import json
+
+    from cga.pipelines.gcl_train.losses import build_full_softmax_data
+    from cga.pipelines.gcl_train.models import build_residual_adapter_encoder
+
+    torch.manual_seed(0)
+    n_src, n_tgt = 6, 8
+    text = torch.randn(n_src + n_tgt, 8)
+    roles = ["g1"] * n_src + ["g2"] * n_tgt
+    pairs = [(i, n_src + i) for i in range(n_src)]
+    data = build_full_softmax_data(pairs, graph_roles=roles, held_out=[False] * len(roles), gold_pairs=pairs)
+    examples = ExampleTensors(*(torch.zeros(1, dtype=torch.long) for _ in range(5)))
+    model = build_residual_adapter_encoder(adapter="mlp", lam=4.0, adapter_dim=16, text_dim=8, adapter_dropout=0.0)
+    kwargs = dict(
+        model=model,
+        text_features=text,
+        struct_features=text,
+        edge_index=torch.empty((2, 0), dtype=torch.long),
+        train_examples=examples,
+        loss_kwargs={"temperature": 0.1, "reverse_weight": 0.5},
+        alpha=0.5,
+        optimizer=torch.optim.Adam(model.parameters(), lr=1e-2),
+        epochs=40,
+        checkpoint_every=0,
+        checkpoint_dir=tmp_path / "ck",
+        universe_sha256="x",
+        metrics_path=tmp_path / "metrics.jsonl",
+        logger=logging.getLogger("test"),
+        log_every=100,
+    )
+    with pytest.raises(ValueError):
+        train_model(loss_name="infonce_full", **kwargs)
+
+    out = train_model(loss_name="infonce_full", full_data=data, **kwargs)
+
+    rows = [json.loads(line) for line in (tmp_path / "metrics.jsonl").read_text().splitlines()]
+    assert len(rows) == 40
+    assert all(math.isfinite(r["loss"]) for r in rows)
+    assert rows[-1]["loss"] < rows[0]["loss"]
+    assert out.shape == (n_src + n_tgt, 8 + 16)

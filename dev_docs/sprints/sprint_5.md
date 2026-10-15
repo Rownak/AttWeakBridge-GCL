@@ -158,11 +158,11 @@ neighbour adapter. This builds the residual floor and the edge-direction plumbin
 This builds the loss and trainer path once, and measures what supervision adds *without* structure (the A3 control
 for 5.3).
 
-- [ ] `ResidualAdapterEncoder` with `adapter: mlp`:
+- [x] `ResidualAdapterEncoder` with `adapter: mlp`:
   - `h = MLP_2(x̂)` (768 → 256 → 256, ReLU, LayerNorm, dropout 0.2);
   - SapBERT frozen; λ fixed;
   - final layer initialized small (std 1e-3), so `z` starts close to SapBERT plus noise.
-- [ ] `gcl_train/losses.py` + `trainer.py`: register `infonce_full` (design §6):
+- [x] `gcl_train/losses.py` + `trainer.py`: register `infonce_full` (design §6):
   - **Positives:** distinct `(anchor_id, text_pos_id)` from `examples.parquet` (train split). Sampled negatives
     are ignored.
   - **Candidates:** all non-held-out universe nodes with the positive's `graph_role` (≈ 5k DOID). The reverse term
@@ -172,12 +172,12 @@ for 5.3).
   - Score `s = cos(z_a, z_d)`, temperature `gcl_train.loss.temperature` (start 0.05).
   - When `loss.name == infonce_full`, the graph-view loss is skipped (`alpha` ignored). This removes the
     within-graph triplet loss from the retrieval objective.
-- [ ] Runs:
+- [x] Runs:
   - `lambda` = the β chosen in 5.1 (fixed), τ ∈ {0.05, 0.1}, epochs ∈ {50, 100, 200}, Adam lr 1e-3, weight decay
     1e-4;
   - pick τ and epochs on val with seed 42, then run 3 seeds of the chosen setting;
   - `model_id = srga-mlp-l<λ>-s<seed>`.
-- [ ] Tests (`test_losses.py`, `test_trainer.py`):
+- [x] Tests (`test_losses.py`, `test_trainer.py`):
   - `infonce_full` equals a hand-computed value on a 2-anchor × 4-candidate fixture;
   - masked gold targets contribute nothing;
   - held-out nodes never appear among candidates;

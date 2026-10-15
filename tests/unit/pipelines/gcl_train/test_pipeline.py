@@ -254,3 +254,36 @@ def test_gcn_run_records_nonzero_trainable_params(tmp_path):
     )
     ctx = _run_gcl_train(config)
     assert read_json(ctx.run_dir / "manifest.json")["summary"]["n_trainable_params"] > 0
+
+
+def test_infonce_full_mlp_run_end_to_end(tmp_path):
+    from cga.data.schemas import ALIGNMENTS_SCHEMA
+
+    config = _build_config(tmp_path, epochs=5)
+    config["gcl_train"]["model"] = {
+        "encoder": "residual_adapter",
+        "adapter": "mlp",
+        "lambda": 0.25,
+        "adapter_dim": 8,
+        "adapter_dropout": 0.2,
+        "model_id": "srga-mlp-test",
+    }
+    config["gcl_train"]["loss"] = {"name": "infonce_full", "temperature": 0.05, "reverse_weight": 0.5}
+    td_dir = _setup_training_data_run(
+        config, example_tuples=[("attack:1", "cwe:1", "cwe:2", "attack:2", "attack:3"), ("attack:2", "cwe:2", "cwe:3", "attack:1", "attack:4")]
+    )
+    ingest_dir = next((Path(config["paths"]["processed"]) / "attack_cwe").glob("2026*"))
+    rows = [
+        {"alignment_id": f"a{i}", "node_1_id": n1, "node_2_id": n2, "relation": "equivalence", "score": 1.0,
+         "split": "train", "candidates": None}
+        for i, (n1, n2) in enumerate([("attack:1", "cwe:1"), ("attack:2", "cwe:2"), ("attack:1", "cwe:4")])
+    ]
+    pq.write_table(pa.Table.from_pylist(rows, schema=ALIGNMENTS_SCHEMA), ingest_dir / "alignments.parquet")
+
+    ctx = _run_gcl_train(config)
+
+    matrix = AlignedMatrix.load(ctx.run_dir / "node_embeddings")
+    assert matrix.vectors.shape == (len(ALL_IDS), 6 + 8)
+    assert len((ctx.run_dir / "metrics.jsonl").read_text(encoding="utf-8").strip().splitlines()) == 5
+    manifest = read_json(ctx.run_dir / "manifest.json")
+    assert manifest["summary"]["n_trainable_params"] > 0
