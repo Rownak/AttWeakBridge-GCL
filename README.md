@@ -195,6 +195,33 @@ Each `configs/sweeps/*.yaml` spec's own header comment documents which config pa
 why; each `configs/experiments/*_sweep_compare.yaml`'s `methods:` list must have a `model_id`/
 `ref: latest` entry per sweep point, matching the ids that spec produces.
 
+## Supervised run on gold alignments (`ncit_doid_supervised`)
+
+[configs/datasets/ncit_doid_supervised.yaml](configs/datasets/ncit_doid_supervised.yaml) is
+`ncit_doid` with the gold `refs_equiv` alignments switched on, under its own dataset id so its
+artifacts never touch the unsupervised `ncit_doid` lineage. Gold **train** pairs are the positive
+cross-graph examples (the `supervised` sampler); gold **test** pairs are held out of every example
+and are what the `gold_alignment` evaluator retrieves. Plan and results:
+[dev_docs/sprints/sprint_4.md](dev_docs/sprints/sprint_4.md),
+[dev_docs/execution_logs/sprint_4.md](dev_docs/execution_logs/sprint_4.md).
+
+```bash
+# Ingest with an all-train node split, so held-out nodes come only from gold test endpoints
+uv run cga run ingest --dataset ncit_doid_supervised --set "ingest.split.fractions=[1.0,0.0,0.0]"
+# Embeddings are reused: copy artifacts/embeddings/ncit_doid/<embedder_id>/<run> (and its LATEST) to
+# artifacts/embeddings/ncit_doid_supervised/<embedder_id>/ -- no re-embedding needed.
+
+uv run cga run training_data --dataset ncit_doid_supervised   --set training_data.inputs.text_embeddings.embedder_id=hf_mean_pool-sapbert   --set training_data.sampler.name=supervised --set training_data.sampler.negatives_per_positive=5
+uv run cga run gcl_train --dataset ncit_doid_supervised   --set gcl_train.inputs.training_data_sampler_id=supervised-negatives_per_positive5   --set gcl_train.model.model_id=gcn-supervised --set gcl_train.train.epochs=100
+
+uv run cga run evaluate --dataset ncit_doid_supervised --experiment ncit_doid_gold_compare
+uv run cga run plot --dataset ncit_doid_supervised --config configs/plots/ncit_doid_gold_compare.yaml
+```
+
+Registered evaluators (`evaluate.evaluations[].kind`): `neighborhood`, `cluster_quality`, and
+`gold_alignment` — Hits@K and MRR for held-out gold pairs, in `global` (all graph_2 nodes, other
+gold targets of the source removed) and `candidates` (the pair's `test.cands` pool) modes.
+
 ## Configuration
 
 All configuration is YAML under [configs/](configs/); nothing else is configuration. Layers are deep

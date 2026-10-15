@@ -158,12 +158,12 @@ signature and the `examples.parquet` schema stay unchanged.
 A new file, `evaluate/evaluators/gold_alignment.py`, registered as `gold_alignment` and imported in
 `evaluators/__init__.py`.
 
-- [ ] Expose alignments to evaluators. `evaluate.LoadStep` reads `alignments.parquet` from the
+- [x] Expose alignments to evaluators. `evaluate.LoadStep` reads `alignments.parquet` from the
       ingest run it already resolves and stores it on `_EvaluateState` as `alignments`. Add the
       field to `EvalResources`. Other evaluators are untouched.
-- [ ] Params: `ks` (e.g. `[1, 5, 10]`), `split` (default `test`), and `modes` (`[global, candidates]`).
+- [x] Params: `ks` (e.g. `[1, 5, 10]`), `split` (default `test`), and `modes` (`[global, candidates]`).
       The evaluator raises `ConfigError` if the selected split has no pairs.
-- [ ] Queries: one per `split` gold pair `(n1, n2)` whose endpoints are present in **every** method
+- [x] Queries: one per `split` gold pair `(n1, n2)` whose endpoints are present in **every** method
       (the same intersection rule as `neighborhood`, so all methods share a query set). The relevant
       set is `{n2}`. Similarity is cosine between the method's `n1` vector and the candidate vectors.
   - `global`: the candidates are all `graph_2` ids in the method intersection, **minus other gold
@@ -171,11 +171,11 @@ A new file, `evaluate/evaluators/gold_alignment.py`, registered as `gold_alignme
     would count as an error for the 1:n sources.
   - `candidates`: the candidates are the row's `test.cands` pool ∩ method intersection, with `n2`
     always included. Skip rows without a pool.
-- [ ] Metrics: reuse `hit_at_k` (via `top_k_by_similarity`) and `mrr_via_argsort`. Emit `MetricRow`s
+- [x] Metrics: reuse `hit_at_k` (via `top_k_by_similarity`) and `mrr_via_argsort`. Emit `MetricRow`s
       with `metric_name` `hits_at_k` (`param_name="k"`) and `mrr`, `view_id` set to the mode,
       `graph_role="graph_1"`, and `n_queries`. Attach `query_set_sha256` via
       `digest.add_scope_provenance`.
-- [ ] Tests (`tests/unit/pipelines/evaluate/test_gold_alignment.py`), on a hand-built 2 + 4 node
+- [x] Tests (`tests/unit/pipelines/evaluate/test_gold_alignment.py`), on a hand-built 2 + 4 node
       fixture with known vectors:
   - Hits@1, Hits@K, and MRR equal hand-computed values. A target at rank 3 gives MRR = 1/3,
     Hits@1 = 0, and Hits@5 = 1.
@@ -187,20 +187,35 @@ A new file, `evaluate/evaluators/gold_alignment.py`, registered as `gold_alignme
 
 ## Phase 4.4: Evaluate and record results
 
-- [ ] `configs/experiments/ncit_doid_gold_compare.yaml`:
+- [x] `configs/experiments/ncit_doid_gold_compare.yaml`:
   - methods: `sapbert`, `bert_base`, `deepwalk` (embedding stores), `gcn_rank_topk_k5` (the
     Phase 4.2 unsupervised reference), `gcn_supervised`;
   - one evaluation: `{evaluation_id: gold, kind: gold_alignment, params: {ks: [1, 5, 10], split: test, modes: [global, candidates]}}`.
-- [ ] `uv run cga run evaluate --dataset ncit_doid_supervised --experiment ncit_doid_gold_compare`.
+- [x] `uv run cga run evaluate --dataset ncit_doid_supervised --experiment ncit_doid_gold_compare`.
       Outputs go to `artifacts/evaluations/ncit_doid_supervised/<run_id>/metrics.{parquet,json}`
       as usual.
-- [ ] Execution log table, one row per method: Hits@1/5/10 and MRR for `global` and `candidates`,
+- [x] Execution log table, one row per method: Hits@1/5/10 and MRR for `global` and `candidates`,
       plus `n_queries`. State the expected readings: `deepwalk` should score near chance (the two
       graphs share no walks), and `sapbert` is the text-only bar the supervised model must beat.
-- [ ] Optional, only if an existing figure kind fits without code changes:
+- [x] Optional, only if an existing figure kind fits without code changes:
       `configs/plots/ncit_doid_gold_compare.yaml` with a bar chart of `mrr` and `hits_at_k` per method.
-- [ ] `README.md`: add the `ncit_doid_supervised` dataset config, the Sprint 4 commands, and the
+- [x] `README.md`: add the `ncit_doid_supervised` dataset config, the Sprint 4 commands, and the
       new evaluator to the evaluator list. Leave the existing `ncit_doid` sections unchanged.
+
+
+## Phase 4.5: Supervised run with `alpha=0.75`
+
+One extra training point, no code changes. Phase 4.4 trained at `alpha=0.5`; this checks whether weighting the text
+loss more heavily (0.75) moves held-out retrieval. It is a single point, not a sweep.
+
+- [x] `gcl_train` on the existing supervised examples (`LATEST` of `supervised-negatives_per_positive5`):
+      `uv run cga run gcl_train --dataset ncit_doid_supervised --set gcl_train.inputs.training_data_sampler_id=supervised-negatives_per_positive5 --set gcl_train.loss.alpha=0.75 --set gcl_train.model.model_id=gcn-supervised-alpha0.75 --set gcl_train.train.epochs=100`
+- [x] Sanity check: `loss` and `loss_text` decrease in `metrics.jsonl` and contain no NaN.
+- [x] Add a sixth method to `configs/experiments/ncit_doid_gold_compare.yaml`:
+      `{method_id: gcn_supervised_alpha0.75, label: "GCN supervised a=0.75", kind: gcl_run, model_id: gcn-supervised-alpha0.75, ref: latest}`.
+      Re-run `evaluate` and `plot` (commands as in Phase 4.4).
+- [x] Execution log: add the new row to the results tables and compare with `gcn_supervised` (`alpha=0.5`) and
+      `sapbert`. State plainly whether it closes the gap to SapBERT.
 
 ---
 

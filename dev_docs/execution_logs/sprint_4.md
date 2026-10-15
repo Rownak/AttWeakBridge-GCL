@@ -276,3 +276,238 @@ uv run cga run gcl_train --dataset ncit_doid_supervised --set gcl_train.inputs.t
 `models/gcl/ncit_doid/` is untouched (for example, `gcn-rank_topk-k5/LATEST` is still `20261012T010104Z-c369f70c`).
 
 No code or config changes in this phase; only artifacts. The sprint plan's Phase 4.2 boxes are ticked.
+
+## Phase 4.3 — `gold_alignment` evaluator
+
+### What changed
+
+- New [evaluators/gold_alignment.py](../../src/cga/pipelines/evaluate/evaluators/gold_alignment.py), registered as
+  `gold_alignment` and imported in `evaluators/__init__.py`. The pipeline's loop is untouched.
+- `evaluate.LoadStep` now reads `alignments.parquet` from the ingest run it already resolves (`None` if the file is
+  absent) and stores it on `_EvaluateState.alignments`. `EvalResources` gained the `alignments` field. The other
+  evaluators ignore it.
+- **Params:** `ks`, `split` (default `test`), `modes` (default `[global, candidates]`). `ConfigError` is raised for
+  an empty `ks` or a `k` below 1, an unknown mode, no alignments at all, no pairs in the selected split, or no pair
+  whose endpoints are in every method.
+- **Queries:** one per distinct gold pair `(n1, n2)` of the split, kept only when `n1` (graph_1) and `n2` (graph_2)
+  are present in **every** method. All methods therefore share one query set and one candidate pool, as in
+  `neighborhood`. A source with several test targets gives several queries. The relevant set is `{n2}`, and
+  similarity is cosine.
+- **`global`:** candidates are all `graph_2` ids in the method intersection minus the other gold targets of `n1` from
+  any split. The target itself is always kept.
+- **`candidates`:** the pair's `test.cands` pool ∩ method intersection, with `n2` always included. Pairs without a
+  pool are skipped.
+- **Metrics:** `hits_at_k` (`param_name="k"`) and `mrr`, using `top_k_by_similarity`, `hit_at_k` and
+  `mrr_via_argsort` unchanged (ties break by node id). `view_id` is the mode, `graph_role="graph_1"`, and
+  `n_queries` is set per mode.
+- **Provenance:** `add_scope_provenance` per mode records `query_set_sha256` (hash of the sorted pairs), `split`,
+  `n_eligible_queries`, `n_dropped_missing_in_a_method` and `n_skipped_no_candidate_pool`.
+- The candidate id lists are built once per mode, not once per method.
+
+### Tests
+
+[test_gold_alignment.py](../../tests/unit/pipelines/evaluate/test_gold_alignment.py), on a 2-source + 4-target
+fixture with vectors placed by angle (11 tests):
+- Global-mode Hits@1/2/5 and MRR equal the hand-computed values.
+- A target at rank 3 gives MRR = 1/3, Hits@1 = 0 and Hits@5 = 1.
+- The `global` filter drops a train-split sibling target (rank 2), while `candidates` mode keeps it (rank 3).
+- `candidates` mode ranks only inside the pool and always adds the target back.
+- Ties break by node id, and the result is the same on every call.
+- Only the selected split is queried: a train pair is ignored, and `split="train"` queries only it.
+- A pair missing from one method is dropped for every method, so both score the same single query.
+- The scope provenance holds a 64-character `query_set_sha256`.
+- `ConfigError` for no alignments, an empty split, empty `ks`, and a bad mode.
+- Regression test: one source with two test targets gives two queries.
+
+`uv run pytest tests/unit -q` → **400 passed** (389 before this phase, plus 11).
+
+### Real-data smoke run (found one bug)
+
+A throwaway config (outside the repo) with SapBERT and `gcn-supervised` was run through the CLI. The first run failed
+with `AlignedMatrix node_ids must be unique`, because sources that appear in several test pairs were selected once
+per pair. The fixture had missed this. The fix selects each distinct source once and maps queries to its row, and the
+regression test above covers it. After the fix the run succeeded in about 34 s.
+
+Run `20261014T225746Z-8c2d65a8` (artifacts/evaluations/ncit_doid_supervised/; 3,280 queries in both modes; this is
+only a smoke run, and the real Phase 4.4 run will replace it as `LATEST`):
+
+| view | method | Hits@1 | Hits@5 | Hits@10 | MRR |
+|---|---|---|---|---|---|
+| global | sapbert | 0.342 | 0.568 | 0.654 | 0.448 |
+| global | gcn_supervised | 0.135 | 0.315 | 0.414 | 0.223 |
+| candidates | sapbert | 0.393 | 0.669 | 0.778 | 0.519 |
+| candidates | gcn_supervised | 0.192 | 0.466 | 0.633 | 0.329 |
+
+**Observation.** The supervised GCN is clearly **worse** than raw SapBERT on held-out gold pairs, so as trained in
+Phase 4.2 it does not help. The likely cause is the one noted in Phase 4.2: the bottom-5 negatives are easy, so the
+triplet loss reaches about 0 and the model learns little that separates close DOID candidates. Whether the
+`rank_topk` reference does better is a Phase 4.4 question. Do not read these smoke numbers as the final result;
+they only show the evaluator is working.
+
+### Files
+
+- Created: `src/cga/pipelines/evaluate/evaluators/gold_alignment.py`,
+  `tests/unit/pipelines/evaluate/test_gold_alignment.py`.
+- Modified: `src/cga/pipelines/evaluate/evaluators/__init__.py`, `src/cga/pipelines/evaluate/pipeline.py`,
+  `dev_docs/sprints/sprint_4.md` (Phase 4.3 boxes ticked).
+
+### Notes
+
+- No pipeline-level test covers `LoadStep` exposing `alignments`; the real-data CLI run above is the only check of
+  that wiring.
+- The `gold_alignment` evaluator is never run in the existing `ncit_doid` experiments, whose configs are unchanged.
+
+### Commands
+
+```
+uv run pytest tests/unit/pipelines/evaluate -q
+# Phase 4.4: add configs/experiments/ncit_doid_gold_compare.yaml, then
+uv run cga run evaluate --dataset ncit_doid_supervised --experiment ncit_doid_gold_compare
+```
+
+## Phase 4.4 — Evaluate and record results
+
+### Tasks and commands
+
+- [configs/experiments/ncit_doid_gold_compare.yaml](../../configs/experiments/ncit_doid_gold_compare.yaml): five
+  methods (`sapbert`, `bert_base`, `deepwalk`, `gcn_rank_topk_k5`, `gcn_supervised`) and one `gold_alignment`
+  evaluation (`ks: [1, 5, 10]`, `split: test`, `modes: [global, candidates]`).
+- [configs/plots/ncit_doid_gold_compare.yaml](../../configs/plots/ncit_doid_gold_compare.yaml): the existing `bar`
+  renderer fit without code changes (`hits_at_k` with `x: param_value`, and `mrr`, each faceted by mode).
+
+```
+uv run cga run evaluate --dataset ncit_doid_supervised --experiment ncit_doid_gold_compare
+uv run cga run plot --dataset ncit_doid_supervised --config configs/plots/ncit_doid_gold_compare.yaml
+```
+- evaluate run `20261014T234059Z-1f611eae` (about 78 s). It replaces the Phase 4.3 smoke run
+  `20261014T225746Z-8c2d65a8` as `LATEST` for `artifacts/evaluations/ncit_doid_supervised/`.
+- plot run `20261014T234229Z-92bfb512` (manifest confirms it read that evaluate run); figures
+  `figures/hits_at_k.png` and `figures/mrr.png`.
+- Each method row records its resolved run id, which is the Phase 4.2 model or the copied store (for example
+  `gcn_supervised` = `20261014T195655Z-fcc54097`, `gcn_rank_topk_k5` = `20261014T195834Z-2a804d8e`).
+
+### Results (held-out gold test pairs)
+
+`n_queries` = **3,280** in both modes, and nothing was dropped (`n_dropped_missing_in_a_method` = 0,
+`n_skipped_no_candidate_pool` = 0). Both modes share `query_set_sha256 = 477cd339…4603`. `global` ranks against
+8,465 DOID nodes (minus sibling gold targets of the source), and `candidates` ranks against 101 per pair.
+
+**`global` mode**
+
+| method | Hits@1 | Hits@5 | Hits@10 | MRR |
+|---|---|---|---|---|
+| SapBERT (text) | **0.342** | **0.568** | **0.654** | **0.448** |
+| GCN supervised | 0.135 | 0.315 | 0.414 | 0.223 |
+| GCN rank_topk k=5 | 0.076 | 0.188 | 0.262 | 0.140 |
+| BERT-base (text) | 0.012 | 0.023 | 0.031 | 0.019 |
+| DeepWalk (graph) | 0.000 | 0.000 | 0.000 | 0.001 |
+
+**`candidates` mode (101 candidates per pair)**
+
+| method | Hits@1 | Hits@5 | Hits@10 | MRR |
+|---|---|---|---|---|
+| SapBERT (text) | **0.393** | **0.669** | **0.778** | **0.519** |
+| GCN supervised | 0.192 | 0.466 | 0.633 | 0.329 |
+| GCN rank_topk k=5 | 0.128 | 0.353 | 0.526 | 0.251 |
+| DeepWalk (graph) | 0.004 | 0.026 | 0.064 | 0.039 |
+| BERT-base (text) | 0.023 | 0.063 | 0.101 | 0.062 |
+
+### Reading the results
+
+- **DeepWalk is at chance, as expected.** The two graphs share no walks, so their DeepWalk spaces are unrelated.
+  Global MRR is 0.0007, close to the random level of about 0.001 for 8,465 candidates, and candidates-mode MRR is
+  0.039 (random is about 0.05). This also confirms the evaluator and query set are not leaking.
+- **SapBERT is the bar, and nothing beats it.** It is a biomedical-synonym model, and NCIT/DOID labels and synonyms
+  overlap heavily, so text alone retrieves the gold target first for 34% of pairs (39% in `candidates` mode).
+- **BERT-base is near chance in `global` mode** (MRR 0.019): mean-pooled generic BERT vectors put almost all texts
+  in a narrow cone, so cosine ranking carries little signal.
+- **Supervision helps relative to unsupervised training.** `gcn_supervised` beats `gcn_rank_topk_k5` on every metric
+  (global MRR 0.223 vs 0.140; Hits@10 0.414 vs 0.262), and the held-out comparison is fair because both models share
+  the same universe and held-out nodes. The gold pairs add real signal.
+- **It does not beat the text-only baseline.** `gcn_supervised` reaches about half of SapBERT's MRR (0.223 vs
+  0.448 global, 0.329 vs 0.519 candidates). So, as configured, the supervised GCN is **not** an improvement over using
+  SapBERT directly for this task.
+
+### Likely causes (not tested in this sprint)
+
+1. **Easy negatives.** Text negatives are the 5 least-similar DOID nodes (only 520 distinct nodes across 6,915
+   examples), so the triplet loss drops to about 0.004 and the model learns to separate near and far, not to
+   discriminate between close candidates. This is the first knob for a later sprint, as the plan's caveats say.
+2. **Information loss.** The GCN maps a 768-d SapBERT input (plus 128-d DeepWalk) to a 128-d space with one dual
+   objective. Any such projection can only lose text detail that raw SapBERT cosine keeps, unless training adds
+   something back.
+3. **Small training set.** 1,383 positive pairs against a 24k-node graph.
+4. Transductivity (see the plan's caveats) is a property of the setup, not a leak: test nodes appear in the GCN graph
+   but never in an example.
+
+These are hypotheses only. Checking them (hard negatives, `alpha` sweeps, other encoders) is out of scope for this
+sprint.
+
+### README
+
+[README.md](../../README.md): added a "Supervised run on gold alignments (`ncit_doid_supervised`)" section (config,
+the Sprint 4 commands from ingest through plot, and the evaluator list including `gold_alignment`). It is a pure
+addition (27 lines); the existing `ncit_doid` text and tables are unchanged.
+
+### Files
+
+- Created: `configs/experiments/ncit_doid_gold_compare.yaml`, `configs/plots/ncit_doid_gold_compare.yaml`.
+- Modified: `README.md`, `dev_docs/sprints/sprint_4.md` (Phase 4.4 boxes ticked).
+- New artifacts (not tracked by git): `artifacts/evaluations/ncit_doid_supervised/20261014T234059Z-1f611eae/`,
+  `artifacts/plots/ncit_doid_supervised/20261014T234229Z-92bfb512/`.
+- No code changes in this phase.
+
+### Sprint 4 status
+
+All of Phases 4.0–4.4 are complete. The supervised experiment runs end to end on `ncit_doid_supervised`, with test
+isolation, valid negatives and metric correctness covered by tests (400 unit tests pass). The headline result is
+negative: **supervised GCN beats the unsupervised GCN but not SapBERT**.
+
+## Phase 4.5 — Supervised run with `alpha=0.75`
+
+One extra training point (not a sweep). No code changes.
+
+### Train
+
+```
+uv run cga run gcl_train --dataset ncit_doid_supervised --set gcl_train.inputs.training_data_sampler_id=supervised-negatives_per_positive5 --set gcl_train.loss.alpha=0.75 --set gcl_train.model.model_id=gcn-supervised-alpha0.75 --set gcl_train.train.epochs=100
+```
+- Run `20261015T004848Z-799b2de8` under `models/gcl/ncit_doid_supervised/gcn-supervised-alpha0.75/` (about 12 s).
+- It uses the same supervised examples as Phase 4.2 (`training_data` run `20261014T195623Z-d97cb67f`, 6,915 examples).
+  `alpha: 0.75` is confirmed in the run's `config.resolved.yaml`.
+- Loss sanity: `loss` 0.7202 → 0.0039, `loss_text` 0.7457 → 0.0017, `loss_graph` 0.6436 → 0.0104. There is no NaN, and no
+  epoch where any of the three rose.
+
+### Evaluate
+
+- Added the sixth method `gcn_supervised_alpha0.75` to
+  [ncit_doid_gold_compare.yaml](../../configs/experiments/ncit_doid_gold_compare.yaml) (and a header note).
+- evaluate run `20261015T004909Z-ff7fa56a` (now `LATEST`, replacing `20261014T234059Z-1f611eae`) and plot run
+  `20261015T005047Z-92bfb512`.
+- The other five methods' 40 rows match the Phase 4.4 run exactly (max difference 0.0), with the same 3,280 queries and
+  the same `query_set_sha256`. So the new row is directly comparable to the Phase 4.4 table.
+
+| mode | method | Hits@1 | Hits@5 | Hits@10 | MRR |
+|---|---|---|---|---|---|
+| global | SapBERT (text) | **0.342** | **0.568** | **0.654** | **0.448** |
+| global | GCN supervised a=0.75 | 0.136 | 0.322 | 0.415 | 0.227 |
+| global | GCN supervised a=0.5 | 0.135 | 0.315 | 0.414 | 0.223 |
+| candidates | SapBERT (text) | **0.393** | **0.669** | **0.778** | **0.519** |
+| candidates | GCN supervised a=0.75 | 0.204 | 0.488 | 0.652 | 0.342 |
+| candidates | GCN supervised a=0.5 | 0.192 | 0.466 | 0.633 | 0.329 |
+
+### Reading
+
+- `alpha=0.75` is slightly better than `alpha=0.5` on every metric: global MRR 0.227 vs 0.223 (+0.004), candidates MRR
+  0.342 vs 0.329 (+0.013). The gain is small, and it comes from a single seed, so it is not clear evidence that more text
+  weight helps.
+- **It does not close the gap to SapBERT.** Global MRR is still about half of SapBERT's (0.227 vs 0.448), and candidates
+  MRR 0.342 vs 0.519. Changing `alpha` from 0.5 to 0.75 does not change the Phase 4.4 conclusion.
+- Together with the small effect of `alpha`, this supports the Phase 4.4 reading that the limit is the training signal
+  (easy negatives, 128-d projection, few positives), not the text/graph loss mix. This is still a hypothesis, since
+  no hard-negative or `alpha=1` run was done.
+
+### Files
+
+- Modified: `configs/experiments/ncit_doid_gold_compare.yaml`, `dev_docs/sprints/sprint_4.md` (Phase 4.5 boxes ticked).
+- New artifacts (not tracked by git): the model run above, the evaluate run and the plot run.

@@ -24,7 +24,7 @@ from cga.core.pipeline import Pipeline, Step
 from cga.core.registry import pipelines
 from cga.core.run import RunContext
 from cga.data.aligned import AlignedMatrix
-from cga.data.graph_store import read_edges, read_nodes
+from cga.data.graph_store import read_alignments, read_edges, read_nodes
 from cga.pipelines.embed.graph_embedders import build_graph
 from cga.pipelines.evaluate.evaluators import evaluators
 from cga.pipelines.evaluate.methods import MethodSpec, load_method
@@ -48,6 +48,7 @@ class _EvaluateState:
         self.method_specs: dict[str, MethodSpec] = {}
         self.graph_role_by_node: dict[str, str] = {}
         self.graph: Any = None
+        self.alignments: Any = None
         self.digest = MetricsDigest()
         self.rows: list[MetricRow] = []
         self.ingest_run_id: str = ""
@@ -99,6 +100,10 @@ class LoadStep:
             zip(edges_table.column("src_id").to_pylist(), edges_table.column("dst_id").to_pylist())
         )
         state.graph = build_graph(nodes_table.column("node_id").to_pylist(), edge_pairs)
+
+        # Exposed to evaluators that need gold pairs (gold_alignment); others ignore it.
+        alignments_path = ingest_dir / "alignments.parquet"
+        state.alignments = read_alignments(alignments_path) if alignments_path.exists() else None
 
         for entry in cfg.get("methods", []):
             spec = MethodSpec.from_config(entry)

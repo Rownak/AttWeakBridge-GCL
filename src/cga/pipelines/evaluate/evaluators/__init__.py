@@ -28,6 +28,7 @@ class EvalResources(Protocol):
     method_specs: dict[str, Any]  # method_id -> MethodSpec
     graph_role_by_node: dict[str, str]
     graph: Any  # networkx.Graph
+    alignments: Any  # pyarrow Table of the ingest run's alignments.parquet, or None if absent
     ctx: Any  # RunContext, for resolving evaluator-declared references
     digest: Any  # MetricsDigest -- evaluators may attach scope provenance to it
 
@@ -40,4 +41,4 @@ class Evaluator(Protocol):
         ...
 
 
-from cga.pipelines.evaluate.evaluators import cluster_quality, neighborhood  # noqa: E402,F401
+from cga.pipelines.evaluate.evaluators import cluster_quality, gold_alignment, neighborhood  # noqa: E402,F401
