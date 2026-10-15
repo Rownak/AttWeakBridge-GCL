@@ -22,7 +22,7 @@ import numpy as np
 from cga.data.aligned import AlignedMatrix
 from cga.data.graph_store import read_alignments, read_nodes
 from cga.pipelines.evaluate.evaluators.gold_alignment import GoldAlignmentEvaluator, _normalize
-from cga.pipelines.evaluate.metrics import mrr_via_argsort
+from cga.pipelines.evaluate.metrics import mrr_via_argsort, top_k_by_similarity
 
 
 def _latest(lineage: Path) -> Path:
@@ -31,17 +31,23 @@ def _latest(lineage: Path) -> Path:
 
 
 def query_ranks(
-    matrices: dict[str, AlignedMatrix], ingest_dir: Path, split: str
-) -> tuple[list[tuple[str, str]], dict[str, np.ndarray]]:
-    """Return the evaluator's global-mode queries and each method's 1-based target rank per query.
+    matrices: dict[str, AlignedMatrix],
+    ingest_dir: Path,
+    split: str,
+    keep_candidates: set[str] | None = None,
+) -> tuple[list[tuple[str, str]], dict[str, np.ndarray], dict[str, list[str]]]:
+    """Return the evaluator's global-mode queries, each method's target rank, and its top confuser.
 
     Args:
         matrices: Method name -> embeddings. All methods share one query set and candidate pool.
         ingest_dir: Ingest run directory (``nodes.parquet``, ``alignments.parquet``).
         split: Gold alignment split to query.
+        keep_candidates: When given, every query's candidate list is cut to these ids (the gold
+            target is always kept). ``None`` reproduces the evaluator's pool exactly.
 
     Returns:
-        ``(queries, ranks)`` where ``ranks[name][i]`` is the rank of query ``i``'s gold target.
+        ``(queries, ranks, confusers)``: ``ranks[name][i]`` is the 1-based rank of query ``i``'s gold
+        target and ``confusers[name][i]`` the highest-ranked candidate that is not the target.
     """
     nodes = read_nodes(ingest_dir / "nodes.parquet").to_pylist()
     role_of = {r["node_id"]: r["graph_role"] for r in nodes}
@@ -67,18 +73,25 @@ def query_ranks(
         "global", pairs, {}, targets_of, pool_ids, index_of, shared
     )
     ranks: dict[str, np.ndarray] = {}
+    confusers: dict[str, list[str]] = {}
     for name, matrix in matrices.items():
         pool = _normalize(matrix.select(pool_ids).vectors)
         sources = sorted({q[0] for q in queries})
         src_row = {s: i for i, s in enumerate(sources)}
         sim = _normalize(matrix.select(sources).vectors) @ pool.T
-        out = []
+        out, top_other = [], []
         for qi, (source, target) in enumerate(queries):
             row = sim[src_row[source]]
             row = row if cand_idx[qi] is None else row[cand_idx[qi]]
-            out.append(round(1.0 / mrr_via_argsort(row, cand_ids[qi], {target})))
+            ids = cand_ids[qi]
+            if keep_candidates is not None:
+                sel = [i for i, c in enumerate(ids) if c in keep_candidates or c == target]
+                row, ids = row[sel], [ids[i] for i in sel]
+            out.append(round(1.0 / mrr_via_argsort(row, ids, {target})))
+            top_other.append(next(c for c in top_k_by_similarity(row, ids, 2) if c != target))
         ranks[name] = np.array(out)
-    return queries, ranks
+        confusers[name] = top_other
+    return queries, ranks, confusers
 
 
 def _mrr(r: np.ndarray) -> float:
@@ -108,7 +121,7 @@ def main() -> None:
             names.append(name)
         columns[label] = names
 
-    queries, ranks = query_ranks(matrices, ingest_dir, args.split)
+    queries, ranks, _ = query_ranks(matrices, ingest_dir, args.split)
     base = ranks["A0"]
     print(f"split={args.split} queries={len(queries)}  A0 MRR={_mrr(base):.4f}")
     print("| variant | seed | MRR | wins vs A0 | losses vs A0 | ties |")

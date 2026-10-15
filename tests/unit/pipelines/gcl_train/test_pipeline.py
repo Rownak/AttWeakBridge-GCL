@@ -326,3 +326,45 @@ def test_relational_run_with_edge_rewire_calls_rewire_only_when_enabled(tmp_path
         assert matrix.vectors.shape == (len(ALL_IDS), 6 + 8)
         assert read_json(ctx.run_dir / "manifest.json")["summary"]["n_trainable_params"] > 0
     assert calls == [1]  # called once, for the rewired run only, with the configured seed
+
+
+def _gcn_adapter_config(tmp_path, *, residual_floor: bool, rewire: bool = False):
+    from cga.data.schemas import ALIGNMENTS_SCHEMA
+
+    config = _build_config(tmp_path, epochs=3)
+    config["gcl_train"]["model"] = {
+        "encoder": "residual_adapter",
+        "adapter": "gcn",
+        "lambda": 0.25,
+        "adapter_dim": 8,
+        "residual_floor": residual_floor,
+        "model_id": "srga-gcn-test",
+        "edge_rewire": {"enabled": rewire, "seed": 1},
+    }
+    config["gcl_train"]["loss"] = {"name": "infonce_full", "temperature": 0.05, "reverse_weight": 0.5}
+    _setup_training_data_run(
+        config, example_tuples=[("attack:1", "cwe:1", "cwe:2", "attack:2", "attack:3")]
+    )
+    ingest_dir = next((Path(config["paths"]["processed"]) / "attack_cwe").glob("2026*"))
+    rows = [
+        {"alignment_id": "a0", "node_1_id": "attack:1", "node_2_id": "cwe:1", "relation": "equivalence",
+         "score": 1.0, "split": "train", "candidates": None}
+    ]
+    pq.write_table(pa.Table.from_pylist(rows, schema=ALIGNMENTS_SCHEMA), ingest_dir / "alignments.parquet")
+    return config
+
+
+@pytest.mark.parametrize("residual_floor, width", [(True, 6 + 8), (False, 8)])
+def test_gcn_adapter_infonce_full_run_end_to_end(tmp_path, residual_floor, width):
+    ctx = _run_gcl_train(_gcn_adapter_config(tmp_path, residual_floor=residual_floor))
+
+    matrix = AlignedMatrix.load(ctx.run_dir / "node_embeddings")
+    assert matrix.vectors.shape == (len(ALL_IDS), width)
+    assert np.isfinite(matrix.vectors).all()
+    assert len((ctx.run_dir / "metrics.jsonl").read_text(encoding="utf-8").strip().splitlines()) == 3
+    assert read_json(ctx.run_dir / "manifest.json")["summary"]["n_trainable_params"] > 0
+
+
+def test_gcn_adapter_with_edge_rewire_runs(tmp_path):
+    ctx = _run_gcl_train(_gcn_adapter_config(tmp_path, residual_floor=True, rewire=True))
+    assert AlignedMatrix.load(ctx.run_dir / "node_embeddings").vectors.shape == (len(ALL_IDS), 6 + 8)

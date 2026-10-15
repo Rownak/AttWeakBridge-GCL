@@ -151,7 +151,7 @@ def build_dual_encoder(
     )
 
 
-_ADAPTERS = ("neighbor_mean", "mlp", "relational")
+_ADAPTERS = ("neighbor_mean", "mlp", "relational", "gcn")
 _PARENT_EDGE_TYPE = 1  # reversed copy: message flows parent -> child, so the target's neighbour is a parent
 _CHILD_EDGE_TYPE = 0  # stored direction child -> parent: the target (parent) receives its children
 
@@ -219,6 +219,17 @@ class ResidualAdapterEncoder(nn.Module):
         initialization (``normalize(h)`` is still unit length, so ``z`` is SapBERT plus a
         ``sqrt(lambda)``-scaled, input-dependent block, not a small perturbation).
         ``relational``: trainable directional graph adapter (Phase 5.3), see below.
+        ``gcn``: the paper's text branch with DeepWalk removed (Phase 5.5), see below.
+
+    GCN adapter (``a`` = ``adapter_dim``): the text half of the paper's :class:`DualEncoder`, undirected::
+
+        t_n = fc1(x̂_n)                              Linear(d, a)
+        g_n = GCN(x̂, edge_index)_n                  the unchanged 2-layer GCN tower, d -> a -> a
+        h_n = fc3( Dropout([t_n ; g_n]) )           Linear(2a, a), last layer std 1e-3
+
+    With ``residual_floor=False`` (the A12 control) the SapBERT block is dropped and ``z = h``: the
+    paper's architecture trained alone with the supervised loss, so it separates the effect of the
+    SapBERT floor from the effect of the loss.
 
     Relational adapter (``directional=True``; ``a`` = ``adapter_dim``, ``d`` = text width)::
 
@@ -243,6 +254,7 @@ class ResidualAdapterEncoder(nn.Module):
             ``relational`` uses separate parent/child weights; false collapses both to one undirected relation.
         text_dim: Width of the text input ``x̂`` (needed to size the trainable adapters).
         adapter_dropout: Dropout inside the trainable adapters (train mode only).
+        residual_floor: When false, export ``z = h`` with no SapBERT block (``gcn`` control A12).
 
     Raises:
         ValueError: On an unknown adapter, a not-yet-implemented adapter, or negative ``lam``.
@@ -257,6 +269,7 @@ class ResidualAdapterEncoder(nn.Module):
         directional: bool = False,
         text_dim: int = 768,
         adapter_dropout: float = 0.2,
+        residual_floor: bool = True,
     ) -> None:
         super().__init__()
         if adapter not in _ADAPTERS:
@@ -267,7 +280,15 @@ class ResidualAdapterEncoder(nn.Module):
         self.lam = float(lam)
         self.adapter_dim = adapter_dim
         self.directional = directional
-        if adapter == "mlp":
+        self.residual_floor = residual_floor
+        if adapter == "gcn":
+            self.fc_text = nn.Linear(text_dim, adapter_dim)
+            self.gcn = GCN(in_channels=text_dim, out_channels=adapter_dim, hid_dim=adapter_dim)
+            self.fuse_dropout = nn.Dropout(adapter_dropout)
+            self.fc_fuse = nn.Linear(2 * adapter_dim, adapter_dim)
+            nn.init.normal_(self.fc_fuse.weight, std=1e-3)
+            nn.init.zeros_(self.fc_fuse.bias)
+        elif adapter == "mlp":
             self.mlp = nn.Sequential(
                 nn.Linear(text_dim, adapter_dim),
                 nn.ReLU(),
@@ -335,13 +356,19 @@ class ResidualAdapterEncoder(nn.Module):
                 1 = reversed). Required when ``directional``.
 
         Returns:
-            ``(n, d + d_h)`` with ``d_h`` = ``adapter_dim`` (``mlp``, ``relational``), ``d`` (undirected
-            ``neighbor_mean``) or ``2d`` (directional); ``d`` is the text width.
+            ``(n, d + d_h)`` with ``d_h`` = ``adapter_dim`` (``mlp``, ``relational``, ``gcn``), ``d`` (undirected
+            ``neighbor_mean``) or ``2d`` (directional); ``d`` is the text width. With
+            ``residual_floor=False`` only the ``adapter_dim`` columns of ``h`` are returned.
 
         Raises:
             ValueError: If ``directional`` and ``edge_type`` is ``None`` (``neighbor_mean``, ``relational``).
         """
         x_hat = _unit(text_emb.detach())
+        if self.adapter == "gcn":
+            h = self.fc_fuse(self.fuse_dropout(torch.cat([self.fc_text(x_hat), self.gcn(x_hat, edge_index)], dim=1)))
+            if not self.residual_floor:
+                return h
+            return torch.cat([x_hat, (self.lam**0.5) * _unit(h)], dim=1)
         if self.adapter == "mlp":
             return torch.cat([x_hat, (self.lam**0.5) * _unit(self.mlp(x_hat))], dim=1)
         if self.adapter == "relational":
@@ -365,6 +392,7 @@ def build_residual_adapter_encoder(
     directional: bool = False,
     text_dim: int = 768,
     adapter_dropout: float = 0.2,
+    residual_floor: bool = True,
 ) -> ResidualAdapterEncoder:
     """Construct a :class:`ResidualAdapterEncoder` (see its docstring for the arguments)."""
     return ResidualAdapterEncoder(
@@ -374,4 +402,5 @@ def build_residual_adapter_encoder(
         directional=directional,
         text_dim=text_dim,
         adapter_dropout=adapter_dropout,
+        residual_floor=residual_floor,
     )

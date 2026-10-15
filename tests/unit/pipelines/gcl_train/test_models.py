@@ -220,3 +220,51 @@ def test_relational_adapter_lambda_zero_has_zero_gradient():
     model = build_residual_adapter_encoder(adapter="relational", lam=0.0, adapter_dim=6, text_dim=3)
     model(text, text, edge_index, edge_type).pow(2).sum().backward()
     assert all(p.grad is None or torch.count_nonzero(p.grad) == 0 for p in model.parameters())
+
+
+# ---- gcn adapter (A11) and the no-floor control (A12) ------------------------------------------
+
+
+def test_gcn_adapter_output_layout_and_text_block_is_the_unit_vector():
+    text, edge_index, edge_type = _chain_fixture()
+    model = build_residual_adapter_encoder(adapter="gcn", lam=0.25, adapter_dim=5, text_dim=3).eval()
+    z = model(text * 4.0, text, edge_index, edge_type)
+    assert z.shape == (3, 3 + 5)
+    assert torch.allclose(z[:, :3], text)  # SapBERT block is the unit text vector, untouched
+    assert torch.allclose(z[:, 3:].norm(dim=1), torch.full((3,), 0.5), atol=1e-5)  # sqrt(0.25) * unit
+
+
+def test_gcn_adapter_depends_on_edges_unlike_mlp_and_has_paper_sized_parameters():
+    text = torch.randn(4, 6)
+    chain = torch.tensor([[0, 1, 1, 2, 2, 3, 3, 0], [1, 0, 2, 1, 3, 2, 0, 3]])
+    none = torch.empty((2, 0), dtype=torch.long)
+
+    def with_big_last_layer(adapter: str):
+        torch.manual_seed(0)
+        model = build_residual_adapter_encoder(adapter=adapter, lam=1.0, adapter_dim=8, text_dim=6, adapter_dropout=0.0)
+        last = model.fc_fuse if adapter == "gcn" else model.mlp[-1]
+        torch.nn.init.normal_(last.weight, std=1.0)  # the 1e-3 init would hide the difference
+        return model.eval()
+
+    gcn, mlp = with_big_last_layer("gcn"), with_big_last_layer("mlp")
+    assert not torch.allclose(gcn(text, text, chain), gcn(text, text, none))
+    assert torch.allclose(mlp(text, text, chain), mlp(text, text, none))
+    full = build_residual_adapter_encoder(adapter="gcn", text_dim=768)
+    assert sum(p.numel() for p in full.parameters()) == 590_848  # fc1 + 2 GCNConv + fc3
+
+
+def test_gcn_adapter_lambda_zero_has_zero_gradient():
+    text, edge_index, edge_type = _chain_fixture()
+    model = build_residual_adapter_encoder(adapter="gcn", lam=0.0, adapter_dim=6, text_dim=3)
+    model(text, text, edge_index, edge_type).pow(2).sum().backward()
+    assert all(p.grad is None or torch.count_nonzero(p.grad) == 0 for p in model.parameters())
+
+
+def test_residual_floor_false_exports_h_only_and_defaults_to_the_floor():
+    text, edge_index, edge_type = _chain_fixture()
+    no_floor = build_residual_adapter_encoder(adapter="gcn", adapter_dim=5, text_dim=3, residual_floor=False).eval()
+    z = no_floor(text, text, edge_index, edge_type)
+    assert z.shape == (3, 5)  # no SapBERT block
+    assert build_residual_adapter_encoder(adapter="gcn", adapter_dim=5, text_dim=3).eval()(
+        text, text, edge_index, edge_type
+    ).shape == (3, 3 + 5)

@@ -1,0 +1,14 @@
+# Sprint 5 Phase 5.4 -- A9 lambda curve for the selected variant A3 (MLP adapter, seed 42), val only. Run as:
+#   uv run cga run evaluate --dataset ncit_doid_srga --experiment ncit_doid_srga_lambda
+evaluate:
+  methods:
+    - {method_id: sapbert, label: "SapBERT (A0)", kind: embedding_store, embedder_id: hf_mean_pool-sapbert, ref: latest}
+    - {method_id: "srga-mlp-l0-s42", label: "A3 l=0", kind: gcl_run, model_id: "srga-mlp-l0-s42", ref: latest}
+    - {method_id: "srga-mlp-l0.1-s42", label: "A3 l=0.1", kind: gcl_run, model_id: "srga-mlp-l0.1-s42", ref: latest}
+    - {method_id: "srga-mlp-l0.25-s42", label: "A3 l=0.25", kind: gcl_run, model_id: "srga-mlp-l0.25-s42", ref: latest}
+    - {method_id: "srga-mlp-l0.5-s42", label: "A3 l=0.5", kind: gcl_run, model_id: "srga-mlp-l0.5-s42", ref: latest}
+    - {method_id: "srga-mlp-l1-s42", label: "A3 l=1", kind: gcl_run, model_id: "srga-mlp-l1-s42", ref: latest}
+  evaluations:
+    - evaluation_id: gold_val
+      kind: gold_alignment
+      params: {ks: [1, 5, 10], split: val, modes: [global]}

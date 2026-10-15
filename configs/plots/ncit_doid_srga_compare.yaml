@@ -1,0 +1,14 @@
+# Sprint 5 Phase 5.4 -- figures for ncit_doid_srga_compare (the sprint's test readout), run as:
+#   uv run cga run plot --dataset ncit_doid_srga --config configs/plots/ncit_doid_srga_compare.yaml
+# Plots the LATEST evaluate run; pin another with --set plot.inputs.evaluate_run=<run_id>.
+plot:
+  figures:
+    - {figure_id: test_hits_at_k, kind: bar,
+       select: {evaluation_id: gold_test, metric_name: hits_at_k},
+       x: param_value, hue: method_label, facet: [view_id]}
+    - {figure_id: test_mrr, kind: bar,
+       select: {evaluation_id: gold_test, metric_name: mrr},
+       x: param_value, hue: method_label, facet: [view_id]}
+    - {figure_id: val_mrr, kind: bar,
+       select: {evaluation_id: gold_val, metric_name: mrr},
+       x: param_value, hue: method_label, facet: [view_id]}

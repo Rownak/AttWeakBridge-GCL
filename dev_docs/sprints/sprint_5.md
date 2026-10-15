@@ -65,6 +65,8 @@ Background: [sprint_4.md](sprint_4.md), [execution_logs/sprint_4.md](../executio
 | 5.2 | A3 ≥ A0 (the floor holds) | Debug the loss/λ (λ=0 must equal A0). Do not add the graph adapter on a broken core. |
 | 5.3 | A4 > max(A1, A3) by more than the seed std, **and** A5 (rewired) < A4 | Stop adding architecture. Report the best of A1/A3 as the Sprint 5 result in 5.4. |
 | 5.4 | final test MRR > A0 in both modes | Document the negative result and its stratified breakdown. Stop. |
+| 5.5 | A11 (SRGA-GCN) ≥ A3 − 1 seed std on val, **and** A13 (rewired) < A11 | Record that the paper's GCN tower does not transfer to the supervised task as an SRGA adapter; A3 stays the result. |
+| 5.6 | A14 (SRGA-GAT) ≥ A11 − 1 seed std on val, **and** A16 (rewired) < A14 | Record that attention adds nothing over the paper's GCN in the supervised setting; A11 stays the paper-compatible variant. |
 
 ---
 
@@ -247,20 +249,20 @@ Otherwise SRGA's graph adapter is not justified on this data, and the sprint rep
 **Capability:** a single, honest test readout of the variant selected on val, plus the evidence that the gain comes
 from structure.
 
-- [ ] **Selected variant:** the best of {A1, A3, A4} on val (per gates 5.1–5.3). Evaluate it, A0 and the
+- [x] **Selected variant:** the best of {A1, A3, A4} on val (per gates 5.1–5.3). Evaluate it, A0 and the
       runner-up on **test** (`global` + `candidates`, 3 seeds where trained). This is the one test evaluation of the
       sprint.
-- [ ] **A9 λ curve:** for the selected trained variant, retrain at `lambda ∈ {0.1, 0.25, 0.5, 1}` (seed 42) and
+- [x] **A9 λ curve:** for the selected trained variant, retrain at `lambda ∈ {0.1, 0.25, 0.5, 1}` (seed 42) and
       evaluate on val. Confirm the curve peaks above λ = 0 and that λ = 0 equals A0.
-- [ ] **Stratified win/loss report** on test, for the selected variant vs A0, split by:
+- [x] **Stratified win/loss report** on test, for the selected variant vs A0, split by:
   - whether SapBERT ranks the gold target first;
   - the hop distance (≤ 2 vs > 2) between SapBERT's top confuser and the gold target in DOID.
 
   Report counts fixed, broken and unchanged. This is an analysis script whose output goes in the execution log; it
   needs no pipeline change.
-- [ ] Plot: extend `configs/plots/` with `ncit_doid_srga_compare.yaml` (existing `bar` renderer: `hits_at_k` and
+- [x] Plot: extend `configs/plots/` with `ncit_doid_srga_compare.yaml` (existing `bar` renderer: `hits_at_k` and
       `mrr` faceted by mode).
-- [ ] README: add the `ncit_doid_srga` config and the SRGA commands. Leave existing sections unchanged.
+- [x] README: add the `ncit_doid_srga` config and the SRGA commands. Leave existing sections unchanged.
 
 **Training objective / negatives:** unchanged from the selected phase.
 **Ablation:**
@@ -277,6 +279,186 @@ from structure.
 - `artifacts/evaluations/ncit_doid_srga/<run_id>/metrics.{parquet,json}` with `gold_val`/`gold_test` scopes;
 - plot run figures;
 - the Sprint 5 summary in `execution_logs/sprint_5.md`.
+
+---
+
+## Phase 5.5: The paper's GCN text branch as the SRGA adapter (A11), with no-floor (A12) and rewired (A13) controls
+
+**Why.** The paper's unsupervised `attack_cwe` model is a `DualEncoder`: a 2-layer `GCN` over the text embeddings, plus
+a linear text projection, plus a DeepWalk branch, fused by `fc3`. This phase asks whether the **same GCN text branch**,
+with DeepWalk removed, also works for the supervised NCIT–DOID task when it is:
+- placed beside frozen SapBERT as the SRGA residual (so λ = 0 is still SapBERT); and
+- trained with the Phase 5.2 full-softmax InfoNCE.
+
+If it does, the paper can present one architecture family for both settings: unsupervised GCL and supervised alignment.
+
+It also answers an open Sprint 4 question. The Sprint 4 GCN lost to SapBERT, but that run changed two things at once:
+- it had no SapBERT floor (a random projection to 128-d);
+- it used a weak loss (triplet with easy negatives).
+
+The no-floor control A12 keeps the full-softmax loss and removes the floor, which separates the two causes.
+
+**Capability:** `ResidualAdapterEncoder` gains `adapter: gcn`, which reuses the existing `GCN` class unchanged, and
+`gcl_train.model.residual_floor` (default `true`).
+
+- [x] `adapter: gcn` (`h` built like the paper's text branch, DeepWalk removed):
+  - `t_n = Linear(768 → 256)(x̂_n)` (the paper's `fc1`);
+  - `g = GCN(x̂, edge_index)`: the existing 2-layer `GCN` tower (`GCNConv 768 → 256`, ReLU, `GCNConv 256 → 256`),
+    undirected, symmetric normalisation with self-loops, exactly as the `gcn` encoder uses it;
+  - `h_n = Linear(512 → 256)(Dropout(0.2)([t_n ; g_n]))` (the paper's `fc3`); last layer std 1e-3, zero bias;
+  - export: `z_n = [x̂_n ; √λ · h_n / ||h_n||]`, λ = 0.25. About 591k trainable parameters.
+- [x] `gcl_train.model.residual_floor: false` (A12 only):
+  - export `z_n = h_n` with no SapBERT block;
+  - default `true`, so A1–A6 and every existing run are unchanged.
+- [x] `edge_rewire` (Phase 5.3) is reused as-is for A13.
+- [x] Runs, with the same objective and settings as A3 so the only difference is the adapter: `infonce_full`,
+      τ 0.05, reverse weight 0.5, Adam lr 1e-3, weight decay 1e-4, λ 0.25, 3 seeds (42/43/44).
+  - **A11** SRGA-GCN: 50 epochs. `model_id = srga-gcn-l0.25-s<seed>`.
+  - **A12** GCN without the floor: it learns the whole embedding, so first pick epochs ∈ {50, 100, 200} on val with
+    seed 42, then run 3 seeds. `model_id = gcn-full-e<epochs>-s<seed>`.
+  - **A13** A11 on a rewired graph (`edge_rewire.enabled=true`, `seed=<seed>`). `model_id = srga-gcn-rewired-l0.25-s<seed>`.
+  - New experiment `configs/experiments/ncit_doid_srga_gcn.yaml`: A0, A1, A3, A4, A11, A12, A13; `gold_val` +
+    `gold_train`.
+- [x] Val analysis:
+  - mean ± std table;
+  - paired wins/losses against A0, and A11 vs A3 / A4 (`scripts/srga_paired_ranks.py`).
+- [x] Test, once per finished configuration, after the val table is recorded:
+  - add A11 and A12 to `ncit_doid_srga_compare.yaml` and evaluate;
+  - compare against the Phase 5.4 numbers of A0, A3 and A4 (same test pairs, same models);
+  - run `scripts/srga_stratified.py` for A11 vs A0, beside A3 and A4.
+- [x] Tests (`test_models.py`, `test_pipeline.py`):
+  - `adapter: gcn` output has 768 + 256 columns, and its SapBERT block is the unit text vector;
+  - unlike `mlp`, its `h` changes when edges change;
+  - `lambda = 0` gives zero gradient on the adapter;
+  - `residual_floor: false` exports `h` only (256 columns);
+  - a pipeline run with `infonce_full` + `gcn` adapter completes;
+  - the `gcn`/`gat` `DualEncoder` tests pass unchanged.
+
+**Training objective / negatives:** same as Phases 5.2–5.3 (full-softmax InfoNCE over every non-held-out candidate,
+gold-target mask of any split, no sampled negatives, no graph-view triplet).
+
+**Ablation:**
+- **A11 vs A3:** does the paper's GCN branch add to supervision without a graph?
+- **A11 vs A4:** paper GCN (undirected, 2 hops, symmetric norm) vs the directional relational adapter.
+- **A12 vs A11:** what the SapBERT floor is worth with a strong loss. This answers whether Sprint 4 failed because of
+  the loss or the missing floor.
+- **A13 vs A11:** is it the graph or the capacity?
+
+**Acceptance:**
+- loss decreases with no NaN for all variants;
+- val table (mean ± std, 3 seeds) and paired counts for A0, A1, A3, A4, A11, A12, A13;
+- test table for A11 and A12 in both modes, read once, next to the Phase 5.4 A0/A3/A4 rows;
+- A12's result interpreted against Sprint 4 (GCN supervised, triplet: test MRR 0.223 global).
+
+**Decision:** gate 5.5.
+- A11 is reported as the paper-compatible supervised variant if it is within one seed std of A3 (or better) on val,
+  and A13 is clearly below it. Otherwise A3 stays the result, and the log says the GCN tower does not transfer as an
+  adapter.
+- Either way, the selection decision for Sprint 5 (A3, Phase 5.4) is **not** reopened on test. A11 is an added
+  finding, not a re-selection.
+
+**Caveats:**
+- **Val is small.** Phase 5.4 showed 211 val pairs cannot resolve differences of about 0.01–0.02 MRR (A4 tied A3 on val
+  but led on test). Prefer the paired counts and the test readout for interpretation, and state the val noise.
+- **Over-smoothing.** A 2-layer undirected GCN mixes parents and children. The design's training-free probe showed GCN
+  smoothing lowers Hits@1, so watch Hits@1 against A3.
+- **Scope.** The paper's `attack_cwe` setting has no gold pairs, so this phase does not rerun anything there; it only
+  shows the GCN text branch is usable in the supervised setting.
+
+---
+
+## Phase 5.6: The paper's GAT text branch as the SRGA adapter (A14), with no-floor (A15) and rewired (A16) controls
+
+**Why.** Phase 5.5 showed that the paper's GCN text branch works in the supervised setting, both beside frozen SapBERT
+(A11) and without it (A12). The paper's `DualEncoder` also has a GAT variant (`gcl_train.model.encoder: gat`). This phase
+repeats 5.5 with the existing `GAT` tower in place of the `GCN` one, so the paper can report both message-passing
+families in the supervised setting.
+
+The question this adds: does **learned attention over neighbours** beat the GCN's fixed symmetric average? Attention
+could down-weight unhelpful neighbours, for example a parent that is also a SapBERT confuser. That may reduce breaks
+where A4 broke many.
+
+**Capability:** `ResidualAdapterEncoder` gains `adapter: gat`, which reuses the existing `GAT` class unchanged.
+`residual_floor` and `edge_rewire` are reused from Phases 5.5 and 5.3.
+
+- [ ] `adapter: gat` (built like the 5.5 `gcn` adapter, with the tower swapped):
+  - `t_n = Linear(768 → 256)(x̂_n)` (the paper's `fc1`);
+  - `g = GAT(x̂, edge_index)`: the existing 2-layer `GAT` tower:
+    - layer 1 is `GATConv(768 → 256 / H, heads=H)`, concatenated to 256;
+    - then ReLU;
+    - layer 2 is `GATConv(256 → 256, heads=1, concat=False)`;
+    - `H = gcl_train.model.gat_heads[0]` (default 8, so 32 per head);
+  - `h_n = Linear(512 → 256)(Dropout(0.2)([t_n ; g_n]))` (the paper's `fc3`); last layer std 1e-3, zero bias;
+  - export: `z_n = [x̂_n ; √λ · h_n / ||h_n||]` with the floor (λ = 0.25), or `z_n = h_n` with `residual_floor: false`;
+  - the per-head width `256 / H` keeps the tower about the same size as A11's GCN, at about 590k parameters in total.
+    So A14 vs A11 compares attention against averaging, not model size. `adapter_dim` must be divisible by `H`;
+    otherwise raise a `ValueError`.
+- [ ] Runs, with the same objective and settings as 5.5 (`infonce_full`, τ 0.05, reverse weight 0.5, Adam lr 1e-3,
+      weight decay 1e-4, λ 0.25, seeds 42/43/44):
+  - **A14** SRGA-GAT: 50 epochs (same as A11). `model_id = srga-gat-l0.25-s<seed>`.
+  - **A15** GAT without the floor:
+    - pick epochs ∈ {50, 100, 200} on val with seed 42, the same grid as A12, so A15 vs A12 is a like-for-like
+      comparison;
+    - then run 3 seeds;
+    - `model_id = gat-full-e<epochs>-s<seed>`.
+  - **A16** A14 on a rewired graph (`edge_rewire.enabled=true`, `seed=<seed>`). `model_id = srga-gat-rewired-l0.25-s<seed>`.
+  - New experiment `configs/experiments/ncit_doid_srga_gat.yaml` (A0, A3, A11, A12, A14, A15, A16; `gold_val` +
+    `gold_train`), and `ncit_doid_srga_gat_sel.yaml` for the A15 epoch grid.
+- [ ] Val analysis:
+  - mean ± std table;
+  - paired wins/losses against A0, and A14 vs A11, A15 vs A12, A14 vs A16 (`scripts/srga_paired_ranks.py`).
+- [ ] Test, once per finished configuration, after the val table is recorded:
+  - add A14 and A15 to `ncit_doid_srga_compare.yaml` and evaluate;
+  - compare against the Phase 5.4/5.5 rows (same test pairs, same models);
+  - run `scripts/srga_stratified.py` for A14 and A15 next to A11 and A12;
+  - run `scripts/srga_pool_diagnostic.py` (held-out-only / trainable-only pools) for A14 and A15, as in 5.5 §4.
+- [ ] Attention readout (analysis only, no pipeline change): a script that rebuilds one A14 model per seed from its
+      final checkpoint and reads the first-layer attention weights (`GATConv(..., return_attention_weights=True)`).
+  - Report the mean attention mass each node gives to its self-loop, its parents (`edge_type` 1) and its children
+    (`edge_type` 0), split by graph role.
+  - Also report it for the val/test query sources whose SapBERT top confuser is a 1-hop neighbour, compared with all
+    other sources.
+  - This shows whether attention learned to treat parents and children differently, which the undirected GCN cannot do.
+- [ ] Tests (`test_models.py`, `test_pipeline.py`):
+  - the `gat` output has 768 + 256 columns and its SapBERT block is the unit text vector;
+  - its `h` changes when edges change;
+  - the parameter count matches the GCN adapter within 1%;
+  - `lambda = 0` gives zero gradient on the adapter;
+  - `residual_floor: false` exports `h` only;
+  - `adapter_dim` not divisible by `gat_heads[0]` raises;
+  - a pipeline run with `infonce_full` + `gat` completes, with and without the floor;
+  - the `gcn`/`gat` `DualEncoder` and the 5.5 `gcn` adapter tests pass unchanged.
+
+**Training objective / negatives:** same as Phases 5.2–5.5 (full-softmax InfoNCE over every non-held-out candidate,
+gold-target mask of any split, no sampled negatives, no graph-view triplet).
+
+**Ablation:**
+- **A14 vs A11:** learned attention vs the GCN's symmetric average, at matched size.
+- **A15 vs A12:** the same comparison without the SapBERT floor.
+- **A14 vs A15:** what the floor is worth for GAT (MRR vs breaks of SapBERT-correct queries).
+- **A16 vs A14:** graph or capacity.
+
+**Acceptance:**
+- loss decreases with no NaN for all variants;
+- val table (mean ± std, 3 seeds) and paired counts for A0, A3, A11, A12, A14, A15, A16;
+- test table for A14 and A15 in both modes, read once, next to the A0/A3/A4/A11/A12 rows;
+- stratified fixed/broken and pool-diagnostic tables for A14 and A15;
+- the attention readout table.
+
+**Decision:** gate 5.6.
+- GAT is reported as an equivalent or better paper-compatible variant if A14 is within one seed std of A11 (or better)
+  on val, and A16 is clearly below A14. Otherwise the log records that attention adds nothing over the GCN here, and
+  A11 stays the paper-compatible variant.
+- As in 5.5, no earlier selection is reopened on test. A14 and A15 are added findings.
+
+**Caveats:**
+- **GAT is not deterministic.** The seeding module notes that GAT kernels may be non-deterministic, so expect more seed
+  spread than A11. Report the per-seed values.
+- **Val is small** (211 pairs). Lean on the paired counts and the single test readout, as in 5.4 and 5.5.
+- **Attention is a weak explanation.** The attention readout describes what the model attends to, not why it ranks
+  correctly. Treat it as descriptive.
+- **Duplicate edges.** The GAT tower uses the symmetrized edge list with duplicates, as the paper's `gat` encoder does.
+  A pair stored under two `edge_sources` therefore gets two attention slots.
 
 ---
 

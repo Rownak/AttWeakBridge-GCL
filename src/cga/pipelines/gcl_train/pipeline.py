@@ -295,6 +295,7 @@ class TrainStep:
                 directional=model_cfg.get("directional", False),
                 text_dim=state.text_features.shape[1],
                 adapter_dropout=model_cfg.get("adapter_dropout", 0.2),
+                residual_floor=model_cfg.get("residual_floor", True),
             ).to(ctx.device)
         else:
             model = build_dual_encoder(

@@ -222,6 +222,43 @@ Registered evaluators (`evaluate.evaluations[].kind`): `neighborhood`, `cluster_
 `gold_alignment` — Hits@K and MRR for held-out gold pairs, in `global` (all graph_2 nodes, other
 gold targets of the source removed) and `candidates` (the pair's `test.cands` pool) modes.
 
+## SapBERT-residual graph adapter (`ncit_doid_srga`)
+
+[configs/datasets/ncit_doid_srga.yaml](configs/datasets/ncit_doid_srga.yaml) is `ncit_doid_supervised`
+plus a `val` split: `alignments.val_split: {fraction: 0.15, seed: 42}` moves 15% of the gold train
+sources (all their pairs) to `val`, whose endpoints are held out like test. Every choice is made on
+`val`; `test` is read once per finished configuration. The SRGA encoder
+(`gcl_train.model.encoder: residual_adapter`) exports `z = [x̂ ; sqrt(lambda) * normalize(h)]`: the
+frozen SapBERT vector next to a graph/learned correction `h`, so `lambda = 0` ranks exactly like
+SapBERT. Adapters: `neighbor_mean` (parameter-free, optional `directional`), `mlp` (no edges),
+`relational` (parent/child relational layer) and `gcn` (the paper's text branch: `fc1`, the 2-layer `GCN` tower and `fc3`;
+`model.residual_floor: false` drops the SapBERT block); `loss.name: infonce_full` trains with full-softmax
+InfoNCE over every non-held-out candidate, and `model.edge_rewire` gives a degree-preserving rewired
+control. Design, plan and results:
+[dev_docs/design_docs/sapbert_residual_graph_adapter.md](dev_docs/design_docs/sapbert_residual_graph_adapter.md),
+[dev_docs/sprints/sprint_5.md](dev_docs/sprints/sprint_5.md), `dev_docs/execution_logs/sprint_5_*.md`.
+
+```bash
+uv run cga run ingest --dataset ncit_doid_srga --set "ingest.split.fractions=[1.0,0.0,0.0]"
+# Embeddings are reused: copy artifacts/embeddings/ncit_doid_supervised/<embedder_id>/ to
+# artifacts/embeddings/ncit_doid_srga/<embedder_id>/ (same procedure as above).
+uv run cga run training_data --dataset ncit_doid_srga   --set training_data.inputs.text_embeddings.embedder_id=hf_mean_pool-sapbert   --set training_data.sampler.name=supervised --set training_data.sampler.negatives_per_positive=5
+
+# Training-free A1: neighbour mean, directional, lambda 0.25 (no optimizer loop)
+uv run cga run gcl_train --dataset ncit_doid_srga   --set gcl_train.inputs.training_data_sampler_id=supervised-negatives_per_positive5   --set gcl_train.model.encoder=residual_adapter --set gcl_train.model.adapter=neighbor_mean   --set gcl_train.model.lambda=0.25 --set gcl_train.model.directional=true --set gcl_train.model.model_id=srga-nb-l0.25-dir
+
+# Trained A3 (mlp) / A4 (relational, --set gcl_train.model.directional=true); one run per seed
+uv run cga run gcl_train --dataset ncit_doid_srga --set seed=42   --set gcl_train.inputs.training_data_sampler_id=supervised-negatives_per_positive5   --set gcl_train.model.encoder=residual_adapter --set gcl_train.model.adapter=mlp --set gcl_train.model.lambda=0.25   --set gcl_train.loss.name=infonce_full --set gcl_train.loss.temperature=0.05   --set gcl_train.optim.weight_decay=0.0001 --set gcl_train.optim.lr=0.001 --set gcl_train.train.epochs=50   --set gcl_train.model.model_id=srga-mlp-l0.25-s42
+
+uv run cga run evaluate --dataset ncit_doid_srga --experiment ncit_doid_srga_compare   # gold_val + gold_test
+uv run cga run plot --dataset ncit_doid_srga --config configs/plots/ncit_doid_srga_compare.yaml
+uv run python scripts/srga_paired_ranks.py --dataset ncit_doid_srga --split val   --group A3="srga-mlp-l0.25-s{seed}"   # paired wins/losses vs SapBERT
+uv run python scripts/srga_stratified.py --dataset ncit_doid_srga --split test   --group A3="srga-mlp-l0.25-s{seed}"  # fixed/broken by stratum
+uv run python scripts/srga_pool_diagnostic.py --dataset ncit_doid_srga --split val   --group A3="srga-mlp-l0.25-s{seed}"   # MRR on all / held-out-only / trainable-only candidate pools
+```
+
+In `--set`, write small floats as `0.0001`, not `1e-4` (YAML reads the latter as a string).
+
 ## Configuration
 
 All configuration is YAML under [configs/](configs/); nothing else is configuration. Layers are deep
