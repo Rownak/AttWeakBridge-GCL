@@ -47,7 +47,7 @@ from cga.pipelines.training_data.similarity import (
 )
 
 _HELD_OUT_NODE_SPLITS = frozenset({"val", "test"})
-_HELD_OUT_ALIGNMENT_SPLITS = frozenset({"test"})
+_HELD_OUT_ALIGNMENT_SPLITS = frozenset({"test", "val"})
 
 _ID_COLUMNS = ["anchor_id", "text_pos_id", "text_neg_id", "graph_pos_id", "graph_neg_id"]
 

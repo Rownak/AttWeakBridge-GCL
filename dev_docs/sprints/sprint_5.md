@@ -73,30 +73,30 @@ Background: [sprint_4.md](sprint_4.md), [execution_logs/sprint_4.md](../executio
 **Capability:** a held-out `val` split of gold train pairs, and the `ncit_doid_srga` lineage with A0 baselines on
 val and test. No model changes.
 
-- [ ] **Schema (approved by the developer on 2026-10-15).** Add `"val"` to `AlignmentSplit` in
+- [x] **Schema (approved by the developer on 2026-10-15).** Add `"val"` to `AlignmentSplit` in
       `data/schemas.py`. Only the `Literal` changes; the parquet schema (`split: string`) does not.
-- [ ] **Generic val carve in ingest** (no adapter change):
+- [x] **Generic val carve in ingest** (no adapter change):
   - `IngestAlignmentsStep` reads an optional `dataset.alignments.val_split: {fraction, seed}` (it sits beside the
     `equivalence` block, which is still the only part passed to the adapter);
   - it samples that fraction of distinct `node_1_id`s among `train` rows with `random.Random(seed)` and relabels
     all their train rows `val`;
   - when the key is absent, nothing changes;
   - add `n_alignments_by_split` with `val` to `stats.json`.
-- [ ] `training_data`: `_HELD_OUT_ALIGNMENT_SPLITS = {"test", "val"}`. Val endpoints become `held_out`, so the
+- [x] `training_data`: `_HELD_OUT_ALIGNMENT_SPLITS = {"test", "val"}`. Val endpoints become `held_out`, so the
       existing leakage assertion covers them. `supervised_positives` already takes only `split == "train"`, and gold
       targets of every split (including val) are already excluded from negatives.
-- [ ] `configs/datasets/ncit_doid_srga.yaml`: copy of `ncit_doid_supervised.yaml`, with `id: ncit_doid_srga` and
+- [x] `configs/datasets/ncit_doid_srga.yaml`: copy of `ncit_doid_supervised.yaml`, with `id: ncit_doid_srga` and
       `alignments.val_split: {fraction: 0.15, seed: 42}`.
-- [ ] Ingest with `--set "ingest.split.fractions=[1.0,0.0,0.0]"` (as in 4.0). Copy the three embedding stores into
+- [x] Ingest with `--set "ingest.split.fractions=[1.0,0.0,0.0]"` (as in 4.0). Copy the three embedding stores into
       `artifacts/embeddings/ncit_doid_srga/` and verify `node_id` order and `text_sha256` (Phase 4.0 procedure).
-- [ ] Tests:
+- [x] Tests:
   - the val carve is deterministic for a seed;
   - it is disjoint from train and test;
   - it moves whole sources;
   - no val endpoint appears in `examples.parquet`;
   - the missing-key path is unchanged;
   - `gold_alignment` with `split: val` queries only val pairs.
-- [ ] Evaluate **A0** (SapBERT, BERT-base) on `val` (global) and `test` (both modes) with new experiment
+- [x] Evaluate **A0** (SapBERT, BERT-base) on `val` (global) and `test` (both modes) with new experiment
       `configs/experiments/ncit_doid_srga_compare.yaml`. The evaluation blocks are `gold_val` (`split: val`,
       `modes: [global]`) and `gold_test` (`split: test`, `modes: [global, candidates]`).
 
@@ -117,26 +117,26 @@ val and test. No model changes.
 neighbour adapter. This builds the residual floor and the edge-direction plumbing that Phase 5.3 reuses, and puts the
 §2 probe through the real pipeline.
 
-- [ ] `gcl_train/models.py`: `ResidualAdapterEncoder`, selected by `gcl_train.model.encoder: residual_adapter`.
+- [x] `gcl_train/models.py`: `ResidualAdapterEncoder`, selected by `gcl_train.model.encoder: residual_adapter`.
   - Params: `adapter: neighbor_mean | mlp | relational` (5.1 uses `neighbor_mean`), `lambda`, `adapter_dim`,
     `directional`.
   - It returns `z`, with the SapBERT input used frozen (`requires_grad=False`).
   - `neighbor_mean` builds `h = mean(x̂ over 1-hop neighbours)`, or with `directional: true`,
     `h = [mean parents ; mean children]`. A node without neighbours gets `h = 0`.
-- [ ] `gcl_train/pipeline.py` (load):
+- [x] `gcl_train/pipeline.py` (load):
   - build `edge_type` (0 = stored direction src→dst = child→parent, 1 = reversed) beside the symmetrized
     `edge_index`;
   - the existing `gcn`/`gat` path ignores it.
-- [ ] `trainer`/pipeline: when the model has no trainable parameters (`neighbor_mean`), skip the optimizer loop
+- [x] `trainer`/pipeline: when the model has no trainable parameters (`neighbor_mean`), skip the optimizer loop
       (`epochs` ignored) and go straight to export, recording `n_trainable_params: 0` in the manifest.
-- [ ] Runs:
+- [x] Runs:
   - β grid `lambda ∈ {0, 0.1, 0.25, 0.5, 1}` × `directional ∈ {false, true}`;
   - `model_id = srga-nb-l<λ>[-dir]`, using `--set gcl_train.model.encoder=residual_adapter --set
     gcl_train.model.adapter=neighbor_mean --set gcl_train.model.lambda=<λ>`;
   - training_data: supervised positives (needed only for the run lineage);
   - add them to `ncit_doid_srga_compare.yaml` and evaluate on **val**.
-- [ ] Pick the best β (and direction) on val, then evaluate that one configuration on test.
-- [ ] Tests:
+- [x] Pick the best β (and direction) on val, then evaluate that one configuration on test.
+- [x] Tests:
   - `lambda=0` export ranks identically to SapBERT (metrics equal A0);
   - `z` has 768 + h columns;
   - the directional `h` uses the correct parent/child sides on a 3-node fixture;

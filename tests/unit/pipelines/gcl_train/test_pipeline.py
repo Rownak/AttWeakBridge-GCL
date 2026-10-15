@@ -221,3 +221,36 @@ def test_gcl_train_raises_when_no_train_split_examples(tmp_path):
 
     with pytest.raises(ArtifactValidationError):
         _run_gcl_train(config)
+
+
+def test_residual_adapter_run_skips_training_and_exports_z(tmp_path):
+    config = _build_config(tmp_path, epochs=50)
+    config["gcl_train"]["model"] = {
+        "encoder": "residual_adapter",
+        "adapter": "neighbor_mean",
+        "lambda": 0.25,
+        "directional": True,
+        "model_id": "srga-nb-l0.25-dir",
+    }
+    _setup_training_data_run(
+        config, example_tuples=[("attack:1", "cwe:1", "cwe:2", "attack:2", "attack:3")]
+    )
+
+    ctx = _run_gcl_train(config)
+
+    matrix = AlignedMatrix.load(ctx.run_dir / "node_embeddings")
+    assert matrix.vectors.shape == (len(ALL_IDS), 6 + 12)  # text_dim 6, directional h = 2 * 6
+    assert (ctx.run_dir / "metrics.jsonl").read_text(encoding="utf-8") == ""  # epochs ignored
+    assert not (ctx.run_dir / "checkpoints").exists()
+    manifest = read_json(ctx.run_dir / "manifest.json")
+    assert manifest["summary"]["n_trainable_params"] == 0
+    assert manifest["summary"]["model_id"] == "srga-nb-l0.25-dir"
+
+
+def test_gcn_run_records_nonzero_trainable_params(tmp_path):
+    config = _build_config(tmp_path, epochs=1)
+    _setup_training_data_run(
+        config, example_tuples=[("attack:1", "cwe:1", "cwe:2", "attack:2", "attack:3")]
+    )
+    ctx = _run_gcl_train(config)
+    assert read_json(ctx.run_dir / "manifest.json")["summary"]["n_trainable_params"] > 0

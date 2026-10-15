@@ -195,3 +195,46 @@ def test_ingest_texts_reference_only_known_nodes(tmp_path):
     nodes = read_nodes(ctx.run_dir / "nodes.parquet")
     node_ids = set(nodes.column("node_id").to_pylist())
     assert set(texts.column("node_id").to_pylist()) <= node_ids
+
+
+def _alignment_rows(n_sources: int = 20) -> list[dict]:
+    rows = [{"node_1_id": f"s:{i}", "node_2_id": f"t:{i}", "split": "train"} for i in range(n_sources)]
+    rows.append({"node_1_id": "s:0", "node_2_id": "t:extra", "split": "train"})  # 1:n source
+    rows.append({"node_1_id": "s:test", "node_2_id": "t:test", "split": "test"})
+    return rows
+
+
+def test_carve_val_split_is_deterministic_for_a_seed():
+    from cga.pipelines.ingest.pipeline import carve_val_split
+
+    a, b, c = _alignment_rows(), _alignment_rows(), _alignment_rows()
+    carve_val_split(a, fraction=0.25, seed=7)
+    carve_val_split(b, fraction=0.25, seed=7)
+    carve_val_split(c, fraction=0.25, seed=8)
+    assert a == b
+    assert a != c
+
+
+def test_carve_val_split_moves_whole_sources_and_never_touches_test():
+    from cga.pipelines.ingest.pipeline import carve_val_split
+
+    rows = _alignment_rows()
+    n_moved = carve_val_split(rows, fraction=0.25, seed=0)
+    val = [r for r in rows if r["split"] == "val"]
+    train = [r for r in rows if r["split"] == "train"]
+    assert n_moved == len(val)
+    assert {r["node_1_id"] for r in val}.isdisjoint({r["node_1_id"] for r in train})
+    assert len({r["node_1_id"] for r in val}) == 5  # round(0.25 * 20 train sources)
+    assert [r["split"] for r in rows if r["node_1_id"] == "s:test"] == ["test"]
+
+
+def test_carve_val_split_zero_fraction_changes_nothing_and_bad_fraction_raises():
+    from cga.core.errors import ConfigError
+    from cga.pipelines.ingest.pipeline import carve_val_split
+
+    rows = _alignment_rows()
+    before = [dict(r) for r in rows]
+    assert carve_val_split(rows, fraction=0.0, seed=1) == 0
+    assert rows == before
+    with pytest.raises(ConfigError):
+        carve_val_split(rows, fraction=1.5, seed=1)

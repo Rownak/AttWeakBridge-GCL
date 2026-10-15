@@ -412,3 +412,28 @@ def test_training_data_pipeline_partitions_latest_by_sampler_id(tmp_path):
     lineage_root = Path(config_k2["paths"]["artifacts"]) / "training_data" / "ncit_doid"
     assert (lineage_root / "rank_topk-k2" / "LATEST").read_text(encoding="utf-8").strip() == ctx_k2.run_id
     assert (lineage_root / "rank_topk-k3" / "LATEST").read_text(encoding="utf-8").strip() == ctx_k3.run_id
+
+
+def test_val_alignment_endpoints_are_held_out_and_absent_from_examples(tmp_path):
+    config = _build_config(tmp_path, sampler_name="supervised")
+    _setup_stores(
+        config,
+        tmp_path,
+        alignment_rows=[
+            {"node_1_id": "ncit:1", "node_2_id": "doid:1", "split": "val"},
+            {"node_1_id": "ncit:2", "node_2_id": "doid:2", "split": "train"},
+        ],
+    )
+
+    ctx = _run_training_data(config, tmp_path)
+
+    universe = NodeUniverse.from_parquet(ctx.run_dir / "universe.parquet")
+    held_out_by_node = dict(zip(universe.node_ids, universe.held_out))
+    assert held_out_by_node["ncit:1"] is True
+    assert held_out_by_node["doid:1"] is True
+    assert held_out_by_node["ncit:2"] is False
+    examples = read_examples(ctx.run_dir / "examples.parquet")
+    used = set(examples.column("anchor_id").to_pylist()) | set(examples.column("text_pos_id").to_pylist())
+    used |= set(examples.column("text_neg_id").to_pylist())
+    assert {"ncit:1", "doid:1"}.isdisjoint(used)
+    assert {"ncit:2", "doid:2"} <= used

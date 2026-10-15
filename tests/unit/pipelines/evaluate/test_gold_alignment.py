@@ -174,3 +174,11 @@ def test_source_with_several_test_targets_yields_one_query_per_pair():
     out = _run(_res(_alignments(rows)), ks=[1], modes=["global"])
     assert out[("m", "global", "mrr", None)].n_queries == 2
     assert out[("m", "global", "mrr", None)].metric_value == pytest.approx(1 / 3)
+
+
+def test_val_split_queries_only_val_pairs():
+    rows = BASE_ALIGNMENTS + [("s:2", "t:c", "val", None)]
+    out = _run(_res(_alignments(rows)), ks=[1], split="val", modes=["global"])
+    assert out[("m", "global", "mrr", None)].n_queries == 1
+    # s2's test target t_d is another gold target of s2, so global mode drops it and t_c ranks first.
+    assert out[("m", "global", "mrr", None)].metric_value == pytest.approx(1.0)

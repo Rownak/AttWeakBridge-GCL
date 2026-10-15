@@ -144,3 +144,121 @@ def build_dual_encoder(
         out_channels=out_dim,
         hidden_dim=hidden_dim,
     )
+
+
+_ADAPTERS = ("neighbor_mean", "mlp", "relational")
+_PARENT_EDGE_TYPE = 1  # reversed copy: message flows parent -> child, so the target's neighbour is a parent
+_CHILD_EDGE_TYPE = 0  # stored direction child -> parent: the target (parent) receives its children
+
+
+def _unit(x: torch.Tensor) -> torch.Tensor:
+    """Row-normalize ``x`` to unit L2 norm; all-zero rows stay zero."""
+    return x / x.norm(dim=1, keepdim=True).clamp_min(1e-12)
+
+
+def _mean_over_incoming(
+    x: torch.Tensor, edge_index: torch.Tensor, edge_type: torch.Tensor | None, wanted_type: int | None
+) -> torch.Tensor:
+    """Mean of ``x`` over each node's incoming neighbours (zeros when it has none).
+
+    Args:
+        x: ``(n, d)`` source features.
+        edge_index: ``(2, e)`` message edges, row 0 = source, row 1 = target.
+        edge_type: ``(e,)`` edge types, or ``None`` when ``wanted_type`` is ``None``.
+        wanted_type: Keep only edges of this type; ``None`` keeps all edges.
+
+    Returns:
+        ``(n, d)`` neighbour means. Duplicate edges are collapsed first so a
+        pair stored under two ``edge_sources`` is not counted twice.
+    """
+    src, dst = edge_index
+    if wanted_type is not None:
+        keep = edge_type == wanted_type
+        src, dst = src[keep], dst[keep]
+    n = x.shape[0]
+    unique = torch.unique(src * n + dst)
+    src, dst = unique // n, unique % n
+    total = torch.zeros_like(x).index_add_(0, dst, x[src])
+    count = torch.zeros(n, device=x.device, dtype=x.dtype).index_add_(
+        0, dst, torch.ones(dst.shape[0], device=x.device, dtype=x.dtype)
+    )
+    return total / count.clamp_min(1.0).unsqueeze(1)
+
+
+class ResidualAdapterEncoder(nn.Module):
+    """SapBERT-residual graph adapter (SRGA): ``z = [x̂ ; sqrt(lambda) * normalize(h)]``.
+
+    Keeps the frozen text vector as an untouched block and adds a graph correction
+    beside it, so ``cos(z_a, z_d)`` ranks by ``cos(x̂_a, x̂_d) + lambda * cos(h_a, h_d)``
+    up to per-node norms, and ``lambda = 0`` ranks exactly like the text vector
+    (design_docs/sapbert_residual_graph_adapter.md §5.1). It sits in ``gcl_train``
+    beside :class:`DualEncoder`, selected by ``gcl_train.model.encoder: residual_adapter``;
+    ``gold_alignment`` scores the exported ``z`` unchanged.
+
+    Only ``adapter="neighbor_mean"`` (parameter-free) is implemented; ``mlp`` and
+    ``relational`` are reserved for later phases and rejected here.
+
+    Args:
+        adapter: ``neighbor_mean``, ``mlp`` or ``relational``.
+        lam: Fixed global residual weight ``lambda`` (``>= 0``).
+        adapter_dim: Hidden width of the trainable adapters (unused by ``neighbor_mean``).
+        directional: When true, ``h = [mean parents ; mean children]`` instead of
+            the undirected neighbour mean.
+
+    Raises:
+        ValueError: On an unknown adapter, a not-yet-implemented adapter, or negative ``lam``.
+    """
+
+    def __init__(self, *, adapter: str, lam: float, adapter_dim: int = 256, directional: bool = False) -> None:
+        super().__init__()
+        if adapter not in _ADAPTERS:
+            raise ValueError(f"Unknown adapter '{adapter}'; expected one of {list(_ADAPTERS)}")
+        if adapter != "neighbor_mean":
+            raise ValueError(f"adapter '{adapter}' is not implemented yet (only 'neighbor_mean')")
+        if lam < 0:
+            raise ValueError(f"lambda must be >= 0, got {lam}")
+        self.adapter = adapter
+        self.lam = float(lam)
+        self.adapter_dim = adapter_dim
+        self.directional = directional
+
+    def forward(
+        self,
+        text_emb: torch.Tensor,
+        struct_emb: torch.Tensor,
+        edge_index: torch.Tensor,
+        edge_type: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Return ``z`` for every node.
+
+        Args:
+            text_emb: ``(n, 768)`` text embeddings (used frozen).
+            struct_emb: Unused; kept so the signature matches :class:`DualEncoder`
+                (DeepWalk is not cross-graph comparable and is not an SRGA input).
+            edge_index: ``(2, e)`` symmetrized message edges.
+            edge_type: ``(e,)`` per-edge type (0 = stored child->parent direction,
+                1 = reversed). Required when ``directional``.
+
+        Returns:
+            ``(n, 768 + d_h)`` with ``d_h`` = 768 (undirected) or 1536 (directional).
+
+        Raises:
+            ValueError: If ``directional`` and ``edge_type`` is ``None``.
+        """
+        x_hat = _unit(text_emb.detach())
+        if self.directional:
+            if edge_type is None:
+                raise ValueError("directional neighbor_mean needs edge_type")
+            parents = _mean_over_incoming(x_hat, edge_index, edge_type, _PARENT_EDGE_TYPE)
+            children = _mean_over_incoming(x_hat, edge_index, edge_type, _CHILD_EDGE_TYPE)
+            h = torch.cat([parents, children], dim=1)
+        else:
+            h = _mean_over_incoming(x_hat, edge_index, None, None)
+        return torch.cat([x_hat, (self.lam**0.5) * _unit(h)], dim=1)
+
+
+def build_residual_adapter_encoder(
+    *, adapter: str = "neighbor_mean", lam: float = 0.25, adapter_dim: int = 256, directional: bool = False
+) -> ResidualAdapterEncoder:
+    """Construct a :class:`ResidualAdapterEncoder` (see its docstring for the arguments)."""
+    return ResidualAdapterEncoder(adapter=adapter, lam=lam, adapter_dim=adapter_dim, directional=directional)

@@ -9,6 +9,7 @@ primary-key uniqueness, and FK/role integrity via ``cga.data.graph_store``.
 from __future__ import annotations
 
 import inspect
+import random
 from pathlib import Path
 from typing import Any
 
@@ -157,6 +158,37 @@ class IngestTextsStep:
         ctx.logger.info("ingest_texts: wrote %d text rows", table.num_rows)
 
 
+def carve_val_split(rows: list[dict[str, Any]], *, fraction: float, seed: int) -> int:
+    """Relabel a seeded fraction of train alignment sources as ``val``, in place.
+
+    Sampling is by distinct ``node_1_id`` among ``train`` rows and moves *all* of a
+    sampled source's train rows, so a 1:n source is never split across train and val.
+
+    Args:
+        rows: Alignment row dicts (``AlignmentRecord.model_dump()``); mutated in place.
+        fraction: Fraction of distinct train sources to move to ``val``, in ``[0, 1]``.
+        seed: Seed for ``random.Random``.
+
+    Returns:
+        Number of rows relabeled.
+
+    Raises:
+        ConfigError: If ``fraction`` is outside ``[0, 1]``.
+    """
+    if not 0.0 <= fraction <= 1.0:
+        raise ConfigError(f"alignments.val_split.fraction must be in [0, 1], got {fraction}")
+    # Sorted before sampling so the draw does not depend on adapter row order.
+    sources = sorted({r["node_1_id"] for r in rows if r["split"] == "train"})
+    n_val_sources = round(fraction * len(sources))
+    val_sources = set(random.Random(seed).sample(sources, n_val_sources))
+    n_moved = 0
+    for r in rows:
+        if r["split"] == "train" and r["node_1_id"] in val_sources:
+            r["split"] = "val"
+            n_moved += 1
+    return n_moved
+
+
 class IngestAlignmentsStep:
     """Step 5: drain ``iter_alignments()``; endpoints must exist and be in opposite graphs."""
 
@@ -168,6 +200,10 @@ class IngestAlignmentsStep:
     def run(self, ctx: RunContext) -> None:
         assert self._state.adapter is not None and self._state.nodes_table is not None
         rows = [a.model_dump() for a in self._state.adapter.iter_alignments()]
+        val_cfg = (ctx.config["dataset"].get("alignments") or {}).get("val_split")
+        if val_cfg:
+            n_val = carve_val_split(rows, fraction=val_cfg["fraction"], seed=val_cfg["seed"])
+            ctx.logger.info("ingest_alignments: relabeled %d train rows as val", n_val)
         table = pa.Table.from_pylist(rows, schema=ALIGNMENTS_SCHEMA)
         write_alignments(
             table, self._state.output_dir / "alignments.parquet", nodes=self._state.nodes_table

@@ -15,7 +15,7 @@ from pydantic import BaseModel, ConfigDict
 
 GraphRole = Literal["graph_1", "graph_2"]
 EmbeddingStatus = Literal["ok", "missing_text", "empty_text", "failed", "skipped"]
-AlignmentSplit = Literal["train", "test", "unassigned"]
+AlignmentSplit = Literal["train", "val", "test", "unassigned"]
 NodeSplit = Literal["train", "val", "test"]
 ExampleSplit = Literal["train", "val", "test"]
 Sampler = Literal["rank_topk", "percentile", "supervised"]

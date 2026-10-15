@@ -1,0 +1,20 @@
+# Sprint 5 -- SRGA vs SapBERT on the ncit_doid_srga lineage. Run as:
+#   uv run cga run evaluate --dataset ncit_doid_srga --experiment ncit_doid_srga_compare
+#
+# gold_val (global only: val pairs have no candidate pool) is where every choice is made;
+# gold_test is read once per finished configuration (dev_docs/sprints/sprint_5.md, test discipline).
+# The 5.1 beta grid lives in ncit_doid_srga_grid.yaml (val only); only the val winner (lambda=0.25,
+# directional) and the lambda=0 floor check are added here.
+evaluate:
+  methods:
+    - {method_id: sapbert,   label: "SapBERT (A0)",     kind: embedding_store, embedder_id: hf_mean_pool-sapbert,   ref: latest}
+    - {method_id: bert_base, label: "BERT-base (text)", kind: embedding_store, embedder_id: hf_mean_pool-bert_base, ref: latest}
+    - {method_id: srga-nb-l0,         label: "SRGA nb l=0 (floor)",      kind: gcl_run, model_id: srga-nb-l0,         ref: latest}
+    - {method_id: srga-nb-l0.25-dir,  label: "SRGA nb l=0.25 dir (A1)", kind: gcl_run, model_id: srga-nb-l0.25-dir,  ref: latest}
+  evaluations:
+    - evaluation_id: gold_val
+      kind: gold_alignment
+      params: {ks: [1, 5, 10], split: val, modes: [global]}
+    - evaluation_id: gold_test
+      kind: gold_alignment
+      params: {ks: [1, 5, 10], split: test, modes: [global, candidates]}

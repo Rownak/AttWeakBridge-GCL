@@ -35,7 +35,7 @@ from cga.data.aligned import AlignedMatrix, NodeUniverse
 from cga.data.example_store import read_examples
 from cga.data.graph_store import read_edges
 from cga.pipelines.gcl_train import losses as _losses  # noqa: F401  (registers triplet/infonce)
-from cga.pipelines.gcl_train.models import build_dual_encoder
+from cga.pipelines.gcl_train.models import build_dual_encoder, build_residual_adapter_encoder
 from cga.pipelines.gcl_train.trainer import ExampleTensors, sha256_of_universe, train_model
 
 _ID_COLUMNS = ["anchor_id", "text_pos_id", "text_neg_id", "graph_pos_id", "graph_neg_id"]
@@ -62,6 +62,8 @@ class _GclTrainState:
         self.text_features: torch.Tensor | None = None
         self.struct_features: torch.Tensor | None = None
         self.edge_index: torch.Tensor | None = None
+        self.edge_type: torch.Tensor | None = None
+        self.n_trainable_params: int = 0
         self.train_examples: ExampleTensors | None = None
         self.n_examples_total: int = 0
         self.n_examples_train: int = 0
@@ -139,6 +141,7 @@ class LoadStep:
         src_ids = edges_table.column("src_id").to_pylist()
         dst_ids = edges_table.column("dst_id").to_pylist()
         edge_pairs: list[tuple[int, int]] = []
+        edge_types: list[int] = []
         n_edges_dropped = 0
         # edges.parquet covers every ingested node, but the universe (under
         # universe_policy: intersection) only keeps nodes present in *both*
@@ -155,6 +158,9 @@ class LoadStep:
                 continue
             edge_pairs.append((row_of[src], row_of[dst]))
             edge_pairs.append((row_of[dst], row_of[src]))  # undirected message passing, matches legacy usage
+            # Kept beside the symmetrized edge_index for direction-aware encoders (SRGA); gcn/gat ignore it.
+            # edges.parquet stores child -> parent: type 0 = stored direction, 1 = reversed.
+            edge_types.extend((0, 1))
 
         if n_edges_dropped:
             ctx.logger.info(
@@ -168,6 +174,8 @@ class LoadStep:
             if edge_pairs
             else torch.empty((2, 0), dtype=torch.long, device=device)
         )
+
+        state.edge_type = torch.tensor(edge_types, dtype=torch.long, device=device)
 
         examples_table = read_examples(training_data_dir / "examples.parquet")
         universe_ids = set(universe.node_ids)
@@ -245,15 +253,35 @@ class TrainStep:
         else:
             raise ConfigError(f"Unknown gcl_train.loss.name '{loss_name}'; expected 'triplet' or 'infonce'")
 
-        model = build_dual_encoder(
-            text_dim=state.text_features.shape[1],
-            struct_dim=state.struct_features.shape[1],
-            encoder=model_cfg.get("encoder", "gcn"),
-            hidden_dim=model_cfg.get("hidden_dim", 128),
-            out_dim=model_cfg.get("out_dim", 128),
-            gat_heads=tuple(model_cfg.get("gat_heads", [8, 1])),
-        ).to(ctx.device)
+        if model_cfg.get("encoder", "gcn") == "residual_adapter":
+            model = build_residual_adapter_encoder(
+                adapter=model_cfg.get("adapter", "neighbor_mean"),
+                lam=model_cfg.get("lambda", 0.25),
+                adapter_dim=model_cfg.get("adapter_dim", 256),
+                directional=model_cfg.get("directional", False),
+            ).to(ctx.device)
+        else:
+            model = build_dual_encoder(
+                text_dim=state.text_features.shape[1],
+                struct_dim=state.struct_features.shape[1],
+                encoder=model_cfg.get("encoder", "gcn"),
+                hidden_dim=model_cfg.get("hidden_dim", 128),
+                out_dim=model_cfg.get("out_dim", 128),
+                gat_heads=tuple(model_cfg.get("gat_heads", [8, 1])),
+            ).to(ctx.device)
         state.model = model
+        state.n_trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+        if state.n_trainable_params == 0:
+            # Parameter-free model (neighbor_mean): nothing to optimize, so `epochs` is ignored.
+            ctx.logger.info("train: model has 0 trainable parameters; skipping the optimizer loop")
+            (ctx.run_dir / "metrics.jsonl").write_text("", encoding="utf-8")
+            model.eval()
+            with torch.no_grad():
+                state.final_embeddings = model(
+                    state.text_features, state.struct_features, state.edge_index, state.edge_type
+                ).detach()
+            return
 
         optimizer_name = optim_cfg.get("name", "adam")
         if optimizer_name != "adam":
@@ -340,6 +368,7 @@ class ManifestStep:
             "n_nodes": len(state.universe.node_ids),
             "n_examples": state.n_examples_total,
             "n_examples_train": state.n_examples_train,
+            "n_trainable_params": state.n_trainable_params,
         }
 
 
