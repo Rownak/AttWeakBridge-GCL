@@ -57,7 +57,7 @@ _ID_COLUMNS = ["anchor_id", "text_pos_id", "text_neg_id", "graph_pos_id", "graph
 _SAMPLER_ID_PARAMS = {
     "rank_topk": ("k",),
     "percentile": ("top_pct", "bottom_pct"),
-    "supervised": ("negatives_per_positive",),
+    "supervised": ("negatives_per_positive", "text_negatives"),
 }
 
 

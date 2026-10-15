@@ -3,7 +3,7 @@
 #
 # Needs the ncit_doid_supervised lineage (Phases 4.0-4.2): the copied embedding stores and the two
 # models trained there. gcn_rank_topk_k5 is the unsupervised reference on the same held-out split;
-# gcn_supervised trains on the gold train pairs (alpha=0.5; Phase 4.5 adds alpha=0.75). sapbert is the text-only bar to beat.
+# gcn_supervised trains on the gold train pairs (alpha=0.5; Phase 4.5 adds alpha=0.75, Phase 4.6 random text negatives). sapbert is the text-only bar to beat.
 evaluate:
   methods:
     - {method_id: sapbert,          label: "SapBERT (text)",          kind: embedding_store, embedder_id: hf_mean_pool-sapbert,    ref: latest}
@@ -12,6 +12,7 @@ evaluate:
     - {method_id: gcn_rank_topk_k5, label: "GCN rank_topk k=5",       kind: gcl_run,         model_id: gcn-rank_topk-k5,           ref: latest}
     - {method_id: gcn_supervised,   label: "GCN supervised",          kind: gcl_run,         model_id: gcn-supervised,             ref: latest}
     - {method_id: gcn_supervised_alpha0.75, label: "GCN supervised a=0.75", kind: gcl_run, model_id: gcn-supervised-alpha0.75, ref: latest}
+    - {method_id: gcn_supervised_randneg, label: "GCN supervised rand-neg", kind: gcl_run, model_id: gcn-supervised-randneg, ref: latest}
   evaluations:
     - evaluation_id: gold
       kind: gold_alignment

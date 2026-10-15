@@ -20,6 +20,7 @@ from typing import Protocol
 
 import numpy as np
 
+from cga.core.errors import ConfigError
 from cga.core.registry import samplers
 from cga.pipelines.training_data.similarity import SimilarityMatrix
 
@@ -334,29 +335,43 @@ def supervised_sampler(
     seed: int,
     alignments: list[dict] | None = None,
 ) -> list[ExampleTuple]:
-    """Gold ``train`` pairs as text positives; rank-based text negatives and graph pos/neg.
+    """Gold ``train`` pairs as text positives; bottom-k or random text negatives, rank-based graph pos/neg.
 
     ``alignments`` must be the **full** gold set (every split): positives are
     taken from ``train`` rows only (see :func:`supervised_positives`), while
     the gold targets of **every** split are excluded from negatives. For each
     positive ``(a, p)``, with ``n = negatives_per_positive`` (default 5):
 
-    - ``text_neg_id``: the ``n`` least text-similar ``graph_2`` columns of
-      ``a``'s ``text_g1_g2`` row, after dropping all of ``a``'s gold targets.
-      Held-out targets are already absent from the matrix.
+    - ``text_neg_id``: ``n`` ``graph_2`` columns of ``a``'s ``text_g1_g2`` row,
+      after dropping all of ``a``'s gold targets (held-out targets are already
+      absent from the matrix). ``config["text_negatives"]`` picks how:
+      ``"bottomk"`` (default) takes the ``n`` least text-similar columns;
+      ``"random"`` draws ``n`` distinct columns uniformly with the seeded RNG
+      (all eligible columns if fewer than ``n``).
     - ``graph_pos_id``/``graph_neg_id``: the j-th most/least structurally
       similar other ``graph_1`` node of ``a`` (self excluded), the same rule
       as ``rank_topk``, so the graph-view loss sees a real structural signal.
 
     Negative j is zipped with structural rank j, giving one example row per
     negative. Only NCIT (``graph_1``) anchors are used because the gold files
-    are NCIT->DOID. Sampling is deterministic; ``seed`` only drives the final
-    shuffle. No-ops (returns ``[]``) when ``alignments`` is empty.
+    are NCIT->DOID. ``bottomk`` is deterministic and ``seed`` only drives the
+    final shuffle; ``random`` also draws its negatives from the seed. No-ops
+    (returns ``[]``) when ``alignments`` is empty.
+
+    Raises:
+        ConfigError: If ``text_negatives`` is not ``bottomk`` or ``random``.
     """
+    mode = config.get("text_negatives", "bottomk")
+    if mode not in ("bottomk", "random"):
+        raise ConfigError(f"Unknown supervised text_negatives '{mode}'; expected 'bottomk' or 'random'")
     if not alignments:
         return []
 
     n = config.get("negatives_per_positive", 5)
+    # One RNG for negatives and the final shuffle. bottomk never draws from it
+    # before the shuffle, so its output is identical to before this option existed.
+    rng = random.Random(seed)
+    n_text_cols = len(text_g1_g2.col_ids)
     positives, _ = supervised_positives(alignments, text_g1_g2, graph_g1)
 
     gold_targets: dict[str, set[str]] = {}
@@ -371,23 +386,27 @@ def supervised_sampler(
     examples: list[ExampleTuple] = []
     for anchor_id, pos_id in positives:
         gold_cols = [text_col_of[t] for t in gold_targets[anchor_id] if t in text_col_of]
-        _, text_bottom = _topk_bottomk_indices(
-            text_g1_g2.values[text_row_of[anchor_id]], n, exclude_indices=gold_cols
-        )
+        if mode == "random":
+            gold_set = set(gold_cols)
+            eligible = [i for i in range(n_text_cols) if i not in gold_set]
+            text_neg_cols = rng.sample(eligible, min(n, len(eligible)))
+        else:
+            _, text_neg_cols = _topk_bottomk_indices(
+                text_g1_g2.values[text_row_of[anchor_id]], n, exclude_indices=gold_cols
+            )
         graph_top, graph_bottom = _topk_bottomk_indices(
             graph_g1.values[graph_row_of[anchor_id]], n, exclude_index=graph_col_of.get(anchor_id)
         )
-        for j in range(min(len(text_bottom), len(graph_top))):
+        for j in range(min(len(text_neg_cols), len(graph_top))):
             examples.append(
                 (
                     anchor_id,
                     pos_id,
-                    text_g1_g2.col_ids[text_bottom[j]],
+                    text_g1_g2.col_ids[text_neg_cols[j]],
                     graph_g1.col_ids[graph_top[j]],
                     graph_g1.col_ids[graph_bottom[j]],
                 )
             )
 
-    rng = random.Random(seed)
     rng.shuffle(examples)
     return examples

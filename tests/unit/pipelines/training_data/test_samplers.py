@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
+from cga.core.errors import ConfigError
 from cga.pipelines.training_data.samplers import (
     _topk_bottomk_indices,
     percentile_sampler,
@@ -167,13 +169,16 @@ def _gold_views():
     return text_g1_g2, graph_g1, graph_g2, alignments
 
 
-def _run_supervised(n=2, seed=0):
+def _run_supervised(n=2, seed=0, text_negatives=None):
     text_g1_g2, graph_g1, graph_g2, alignments = _gold_views()
+    config = {"negatives_per_positive": n}
+    if text_negatives is not None:
+        config["text_negatives"] = text_negatives
     return supervised_sampler(
         text_g1_g2=text_g1_g2,
         graph_g1=graph_g1,
         graph_g2=graph_g2,
-        config={"negatives_per_positive": n},
+        config=config,
         seed=seed,
         alignments=alignments,
     )
@@ -262,3 +267,44 @@ def test_supervised_graph_pos_neg_follow_structural_rank():
     a1 = {(gp, gn) for a, p, _n, gp, gn in examples if (a, p) == ("a:1", "b:1")}
     # a:1 graph row (self excluded): a:2 0.8, a:3 0.5, a:4 0.1 -> top [a:2, a:3], bottom [a:4, a:3].
     assert a1 == {("a:2", "a:4"), ("a:3", "a:3")}
+
+
+def test_supervised_random_negatives_are_valid():
+    gold = {("a:1", "b:1"), ("a:1", "b:5"), ("a:2", "b:2"), ("a:2", "b:4"), ("a:9", "b:3"), ("a:9", "b:9")}
+    for seed in range(20):
+        for anchor_id, _pos, text_neg_id, graph_pos_id, graph_neg_id in _run_supervised(n=2, seed=seed, text_negatives="random"):
+            assert text_neg_id.startswith("b:") and text_neg_id != "b:9"  # cross-graph, not held out
+            assert (anchor_id, text_neg_id) not in gold  # not gold in either split
+            assert anchor_id not in (graph_pos_id, graph_neg_id)
+
+
+def test_supervised_random_negatives_are_distinct_per_positive():
+    examples = _run_supervised(n=3, seed=4, text_negatives="random")
+    by_pos: dict[tuple[str, str], list[str]] = {}
+    for anchor_id, pos_id, text_neg_id, *_ in examples:
+        by_pos.setdefault((anchor_id, pos_id), []).append(text_neg_id)
+    assert set(by_pos) == {("a:1", "b:1"), ("a:2", "b:2"), ("a:2", "b:4")}
+    for negs in by_pos.values():
+        assert len(negs) == 3 and len(set(negs)) == 3
+
+
+def test_supervised_random_negatives_cap_at_eligible_columns():
+    # a:1 has 3 eligible columns (b:2, b:3, b:4) and 3 other graph_1 nodes.
+    examples = _run_supervised(n=10, text_negatives="random")
+    a1 = [tup[2] for tup in examples if tup[:2] == ("a:1", "b:1")]
+    assert sorted(a1) == ["b:2", "b:3", "b:4"]
+
+
+def test_supervised_random_negatives_depend_on_seed_only():
+    assert _run_supervised(n=2, seed=11, text_negatives="random") == _run_supervised(n=2, seed=11, text_negatives="random")
+    draws = {tuple(_run_supervised(n=2, seed=s, text_negatives="random")) for s in range(8)}
+    assert len(draws) > 1  # different seeds give different negatives
+
+
+def test_supervised_bottomk_is_the_default_and_unchanged():
+    assert _run_supervised(n=2) == _run_supervised(n=2, text_negatives="bottomk")
+
+
+def test_supervised_unknown_text_negatives_raises():
+    with pytest.raises(ConfigError):
+        _run_supervised(text_negatives="hardest")

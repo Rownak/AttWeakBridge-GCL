@@ -217,6 +217,37 @@ loss more heavily (0.75) moves held-out retrieval. It is a single point, not a s
 - [x] Execution log: add the new row to the results tables and compare with `gcn_supervised` (`alpha=0.5`) and
       `sapbert`. State plainly whether it closes the gap to SapBERT.
 
+## Phase 4.6: Supervised run with random text negatives
+
+This phase replaces the bottom-k text negatives (`_topk_bottomk_indices`) with **uniformly random** eligible DOID
+nodes. Random negatives are more diverse than the 520 recurring bottom-k nodes and somewhat harder on average, but
+they are still not mined hard negatives. Graph pos/neg keep the structural ranking. Everything else matches Phase 4.2
+(`alpha=0.5`, GCN, 100 epochs).
+
+- [x] **Sampler option.** Add `text_negatives: bottomk | random` to the `supervised` sampler. The default is `bottomk`,
+      so Phase 4.2 is unchanged. In `random` mode, draw `negatives_per_positive` distinct columns uniformly, without
+      replacement, from the anchor's `text_g1_g2` columns minus its gold targets (any split), using the seeded
+      `random.Random(seed)`. If fewer columns are eligible, use all of them.
+- [x] `_SAMPLER_ID_PARAMS["supervised"]` += `"text_negatives"`, so the id becomes
+      `supervised-negatives_per_positive5-text_negativesrandom`. Do not add the key to
+      `configs/pipelines/training_data.yaml`, so the existing `supervised-negatives_per_positive5` id is unchanged.
+- [x] Tests (`test_samplers.py`):
+  - random negatives are cross-graph, non-gold (either split), and not held out;
+  - there are `negatives_per_positive` distinct negatives per positive;
+  - the same seed gives identical output and a different seed gives different negatives;
+  - `bottomk` output is unchanged.
+- [x] `training_data`:
+      `uv run cga run training_data --dataset ncit_doid_supervised --set training_data.inputs.text_embeddings.embedder_id=hf_mean_pool-sapbert --set training_data.sampler.name=supervised --set training_data.sampler.negatives_per_positive=5 --set training_data.sampler.text_negatives=random`
+      Record `n_examples`, the used/skipped counts, the number of distinct text negatives, and the mean SapBERT
+      cos(anchor, neg) against the bottom-k run.
+- [x] `gcl_train`:
+      `uv run cga run gcl_train --dataset ncit_doid_supervised --set gcl_train.inputs.training_data_sampler_id=supervised-negatives_per_positive5-text_negativesrandom --set gcl_train.model.model_id=gcn-supervised-randneg --set gcl_train.train.epochs=100`
+      Sanity check: `loss`/`loss_text` decrease, there is no NaN, and record the final loss.
+- [x] Evaluate: add `{method_id: gcn_supervised_randneg, label: "GCN supervised rand-neg", kind: gcl_run, model_id: gcn-supervised-randneg, ref: latest}`
+      to `ncit_doid_gold_compare.yaml`, then re-run `evaluate` and `plot` (commands as in Phase 4.4).
+- [x] Execution log: add the new row to the results tables and compare it with `gcn_supervised` (bottom-k) and
+      `sapbert`. State whether negative choice moves held-out retrieval and whether it closes the gap to SapBERT.
+
 ---
 
 ## Out of scope

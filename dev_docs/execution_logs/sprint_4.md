@@ -511,3 +511,106 @@ uv run cga run gcl_train --dataset ncit_doid_supervised --set gcl_train.inputs.t
 
 - Modified: `configs/experiments/ncit_doid_gold_compare.yaml`, `dev_docs/sprints/sprint_4.md` (Phase 4.5 boxes ticked).
 - New artifacts (not tracked by git): the model run above, the evaluate run and the plot run.
+
+## Phase 4.6 — Supervised run with random text negatives
+
+### What changed
+
+[samplers.py](../../src/cga/pipelines/training_data/samplers.py): the `supervised` sampler has a new
+`text_negatives: bottomk | random` option (default `bottomk`). In `random` mode, `negatives_per_positive` **distinct**
+`graph_2` columns are drawn uniformly, without replacement, from the anchor's `text_g1_g2` columns minus all of its gold
+targets (any split). If fewer are eligible, all of them are used. Graph pos/neg still follow the structural ranking, and
+everything else is as in Phase 4.2.
+- One `random.Random(seed)` is used for the negative draws and then for the final shuffle. `bottomk` draws nothing from
+  it before the shuffle, so its output is identical to before. The existing `bottomk` tests pass unchanged.
+- An unknown value raises `ConfigError`.
+- [pipeline.py](../../src/cga/pipelines/training_data/pipeline.py): `_SAMPLER_ID_PARAMS["supervised"]` now also includes
+  `text_negatives`. The key is not in `configs/pipelines/training_data.yaml`, so the Phase 4.2 id
+  `supervised-negatives_per_positive5` is unchanged, and `random` gets
+  `supervised-negatives_per_positive5-text_negativesrandom`.
+
+### Tests
+
+`uv run pytest tests/unit -q` → **407 passed** (400 + 7). New tests:
+- [test_samplers.py](../../tests/unit/pipelines/training_data/test_samplers.py), 6 tests:
+  - random negatives are cross-graph, not held out, and not gold in either split (20 seeds);
+  - there are `n` distinct negatives per positive;
+  - the count caps at the eligible columns;
+  - the same seed gives identical output, different seeds give different negatives;
+  - `bottomk` is the default and unchanged;
+  - an unknown mode raises `ConfigError`.
+- [test_pipeline.py](../../tests/unit/pipelines/training_data/test_pipeline.py): the sampler-id test for the random
+  variant and the unchanged default id.
+
+### Runs
+
+```
+uv run cga run training_data --dataset ncit_doid_supervised --set training_data.inputs.text_embeddings.embedder_id=hf_mean_pool-sapbert --set training_data.sampler.name=supervised --set training_data.sampler.negatives_per_positive=5 --set training_data.sampler.text_negatives=random
+uv run cga run gcl_train --dataset ncit_doid_supervised --set gcl_train.inputs.training_data_sampler_id=supervised-negatives_per_positive5-text_negativesrandom --set gcl_train.model.model_id=gcn-supervised-randneg --set gcl_train.train.epochs=100
+uv run cga run evaluate --dataset ncit_doid_supervised --experiment ncit_doid_gold_compare
+uv run cga run plot --dataset ncit_doid_supervised --config configs/plots/ncit_doid_gold_compare.yaml
+```
+- `training_data` run `20261015T132053Z-7d41c831`; `gcl_train` run `20261015T132141Z-c198456f`
+  (`models/gcl/ncit_doid_supervised/gcn-supervised-randneg/`, `alpha: 0.5`, about 12 s); evaluate run
+  `20261015T132214Z-f6f36c09` (now `LATEST`); plot run `20261015T132539Z-92bfb512`.
+- Added the seventh method `gcn_supervised_randneg` to
+  [ncit_doid_gold_compare.yaml](../../configs/experiments/ncit_doid_gold_compare.yaml). The other methods' 48 rows
+  match the Phase 4.5 run exactly (max difference 0.0), with the same 3,280 queries and `query_set_sha256`.
+
+### Training data: random vs bottom-k negatives
+
+The stats are identical (6,915 examples, 1,383 pairs used, 23 skipped, 6,515 held-out nodes), and the anchor, positive and
+graph columns are the same set of rows. Only the text negative differs. The leakage assertion passed, and an
+independent check confirmed every negative is a non-held-out DOID node that is not gold for its anchor.
+
+| | bottom-k (Phase 4.2) | random (Phase 4.6) |
+|---|---|---|
+| Distinct text negatives | 520 | **3,820** |
+| Most-reused negative | 380× | 6× |
+| SapBERT cos(anchor, neg): mean / median / max | 0.054 / 0.056 / 0.159 | **0.317 / 0.316 / 0.683** |
+| Rows where the negative is *more* similar than the positive | 0 | 127 |
+| Final `loss` / `loss_text` | 0.0037 / 0.0038 | **0.0349 / 0.0636** |
+
+The 127 rows are the natural "hard" cases that random sampling happens to hit (and a few could be unlabeled true
+matches). The loss no longer collapses: `loss_text` ends at 0.064 instead of 0.004, so the model is still learning
+after epoch 100. Loss curves have no NaN, and `loss`/`loss_text` never rose; `loss_graph` rose in 5 epochs by small
+amounts.
+
+### Results (held-out gold test pairs, 3,280 queries)
+
+| mode | method | Hits@1 | Hits@5 | Hits@10 | MRR |
+|---|---|---|---|---|---|
+| global | SapBERT (text) | **0.342** | **0.568** | **0.654** | **0.448** |
+| global | GCN supervised rand-neg | 0.169 | 0.404 | 0.522 | 0.283 |
+| global | GCN supervised a=0.75 | 0.136 | 0.322 | 0.415 | 0.227 |
+| global | GCN supervised (bottom-k) | 0.135 | 0.315 | 0.414 | 0.223 |
+| global | GCN rank_topk k=5 | 0.076 | 0.188 | 0.262 | 0.140 |
+| candidates | SapBERT (text) | **0.393** | **0.669** | **0.778** | **0.519** |
+| candidates | GCN supervised rand-neg | 0.212 | 0.556 | 0.724 | 0.371 |
+| candidates | GCN supervised a=0.75 | 0.204 | 0.488 | 0.652 | 0.342 |
+| candidates | GCN supervised (bottom-k) | 0.192 | 0.466 | 0.633 | 0.329 |
+| candidates | GCN rank_topk k=5 | 0.128 | 0.353 | 0.526 | 0.251 |
+
+### Reading
+
+- **The choice of negatives matters.** Random negatives improve every metric over bottom-k at the same `alpha`: global
+  MRR 0.223 → 0.283 (+27% relative), Hits@10 0.414 → 0.522, candidates MRR 0.329 → 0.371. This is a larger gain than the
+  Phase 4.5 `alpha` change (+0.004 global MRR), so negatives are the stronger lever. It is still one seed per setting.
+- **It still does not beat SapBERT.** Global MRR is 0.283 vs 0.448 (63% of SapBERT), candidates MRR 0.371 vs 0.519. The gap
+  narrowed from 50% to 63% of SapBERT's MRR, but is not closed.
+- **Supports the diagnosis in [hard_negative_selection.md](../data_analysis/hard_negative_selection.md):** more varied and
+  closer negatives help, even though random draws are still mostly easy (mean cos 0.32, against SapBERT's top
+  competitors at about 0.67). Mined hard negatives (rank bands, hierarchy, full-softmax InfoNCE) and a SapBERT-anchored
+  output are the remaining untested steps listed there.
+
+### Files
+
+- Modified: `src/cga/pipelines/training_data/samplers.py`, `src/cga/pipelines/training_data/pipeline.py`,
+  `tests/unit/pipelines/training_data/test_samplers.py`, `tests/unit/pipelines/training_data/test_pipeline.py`,
+  `configs/experiments/ncit_doid_gold_compare.yaml`, `dev_docs/sprints/sprint_4.md` (Phase 4.6 boxes ticked).
+- New artifacts (not tracked by git): the training_data, model, evaluate and plot runs above.
+
+### Notes
+
+- `ruff` is not installed, so lint was not run.
+- The plan's out-of-scope list says "Hard-negative mining"; random sampling is not mining, so Phase 4.6 stays within it.

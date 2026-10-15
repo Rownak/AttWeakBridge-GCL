@@ -376,6 +376,13 @@ def test_build_sampler_id_supervised_includes_negatives_per_positive():
     assert build_sampler_id({"name": "supervised", "negatives_per_positive": 5}) == "supervised-negatives_per_positive5"
 
 
+def test_build_sampler_id_supervised_random_negatives_gets_its_own_id():
+    cfg = {"name": "supervised", "negatives_per_positive": 5, "text_negatives": "random"}
+    assert build_sampler_id(cfg) == "supervised-negatives_per_positive5-text_negativesrandom"
+    # Default (bottomk) keeps the original id when the key is absent.
+    assert build_sampler_id({"name": "supervised", "negatives_per_positive": 5}) == "supervised-negatives_per_positive5"
+
+
 def test_build_sampler_id_respects_explicit_override():
     assert build_sampler_id({"name": "rank_topk", "k": 30, "sampler_id": "custom"}) == "custom"
 
