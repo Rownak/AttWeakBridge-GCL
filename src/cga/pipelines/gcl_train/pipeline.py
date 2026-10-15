@@ -37,6 +37,7 @@ from cga.data.graph_store import read_alignments, read_edges
 from cga.pipelines.gcl_train import losses as _losses  # noqa: F401  (registers triplet/infonce/infonce_full)
 from cga.pipelines.gcl_train.losses import build_full_softmax_data
 from cga.pipelines.gcl_train.models import build_dual_encoder, build_residual_adapter_encoder
+from cga.pipelines.gcl_train.rewire import rewire_edges
 from cga.pipelines.gcl_train.trainer import ExampleTensors, sha256_of_universe, train_model
 
 _ID_COLUMNS = ["anchor_id", "text_pos_id", "text_neg_id", "graph_pos_id", "graph_neg_id"]
@@ -142,8 +143,7 @@ class LoadStep:
         edges_table = read_edges(ingest_dir / "edges.parquet")
         src_ids = edges_table.column("src_id").to_pylist()
         dst_ids = edges_table.column("dst_id").to_pylist()
-        edge_pairs: list[tuple[int, int]] = []
-        edge_types: list[int] = []
+        stored_edges: list[tuple[int, int]] = []
         n_edges_dropped = 0
         # edges.parquet covers every ingested node, but the universe (under
         # universe_policy: intersection) only keeps nodes present in *both*
@@ -158,8 +158,21 @@ class LoadStep:
             if src not in row_of or dst not in row_of:
                 n_edges_dropped += 1
                 continue
-            edge_pairs.append((row_of[src], row_of[dst]))
-            edge_pairs.append((row_of[dst], row_of[src]))  # undirected message passing, matches legacy usage
+            stored_edges.append((row_of[src], row_of[dst]))
+
+        rewire_cfg = cfg["model"].get("edge_rewire") or {}
+        if rewire_cfg.get("enabled"):
+            # Structural control (A5): same degrees and graph roles, random connectivity. Only the
+            # message-passing graph changes; the universe and examples are untouched.
+            n_before = len(set(stored_edges))
+            stored_edges = rewire_edges(stored_edges, universe.graph_roles, seed=rewire_cfg.get("seed", 0))
+            ctx.logger.info("load: rewired %d stored edges (seed=%s)", n_before, rewire_cfg.get("seed", 0))
+
+        edge_pairs: list[tuple[int, int]] = []
+        edge_types: list[int] = []
+        for s_row, d_row in stored_edges:
+            edge_pairs.append((s_row, d_row))
+            edge_pairs.append((d_row, s_row))  # undirected message passing, matches legacy usage
             # Kept beside the symmetrized edge_index for direction-aware encoders (SRGA); gcn/gat ignore it.
             # edges.parquet stores child -> parent: type 0 = stored direction, 1 = reversed.
             edge_types.extend((0, 1))

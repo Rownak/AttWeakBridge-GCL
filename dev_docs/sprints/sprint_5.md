@@ -206,21 +206,21 @@ for 5.3).
 **Capability:** the design §5.2 adapter. The parameter-free neighbour means from 5.1 are combined with the trainable
 residual core from 5.2. Each component is introduced only after 5.1 and 5.2 pass.
 
-- [ ] `adapter: relational`:
+- [x] `adapter: relational`:
   - `a_n = [x̂_n ; mean_parents x̂ ; mean_children x̂ ; x̂_n ⊙ mean_parents x̂ ; log(1+in_deg), log(1+out_deg)]`;
   - `h = MLP_2(LayerNorm(a_n + RGCN_1(a)))`, one relational layer with separate parent and child weights
     (built from `edge_type`);
   - dropout 0.2, weight decay 1e-4;
   - `directional: false` collapses to one undirected relation (the A6 control).
-- [ ] **Rewiring control (A5):**
+- [x] **Rewiring control (A5):**
   - `gcl_train.model.edge_rewire: {enabled, seed}` applies a degree-preserving double-edge swap *within each
     graph role* before training;
   - it never creates cross-graph edges and leaves universe and examples untouched.
-- [ ] Runs, with the same objective, λ, τ and epochs as chosen in 5.2, and 3 seeds each:
+- [x] Runs, with the same objective, λ, τ and epochs as chosen in 5.2, and 3 seeds each:
   - **A4** `srga-rel-l<λ>-s<seed>`;
   - **A5** `srga-rel-rewired-l<λ>-s<seed>`;
   - **A6** `srga-rel-undir-l<λ>-s<seed>`.
-- [ ] Tests:
+- [x] Tests:
   - the relational layer uses separate weights per `edge_type` (parent-only and child-only fixtures give different
     `h`);
   - rewiring preserves every node's degree and graph role and is seed-deterministic;

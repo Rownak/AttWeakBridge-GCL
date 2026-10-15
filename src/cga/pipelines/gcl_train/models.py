@@ -166,6 +166,16 @@ def _mean_over_incoming(
 ) -> torch.Tensor:
     """Mean of ``x`` over each node's incoming neighbours (zeros when it has none).
 
+    Thin wrapper over :func:`_mean_and_count_over_incoming` that drops the counts.
+    """
+    return _mean_and_count_over_incoming(x, edge_index, edge_type, wanted_type)[0]
+
+
+def _mean_and_count_over_incoming(
+    x: torch.Tensor, edge_index: torch.Tensor, edge_type: torch.Tensor | None, wanted_type: int | None
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Mean of ``x`` over each node's incoming neighbours, plus the neighbour counts.
+
     Args:
         x: ``(n, d)`` source features.
         edge_index: ``(2, e)`` message edges, row 0 = source, row 1 = target.
@@ -173,8 +183,9 @@ def _mean_over_incoming(
         wanted_type: Keep only edges of this type; ``None`` keeps all edges.
 
     Returns:
-        ``(n, d)`` neighbour means. Duplicate edges are collapsed first so a
-        pair stored under two ``edge_sources`` is not counted twice.
+        ``(mean, count)``: ``(n, d)`` neighbour means (zeros without neighbours) and ``(n,)``
+        unique-neighbour counts. Duplicate edges are collapsed first so a pair stored under
+        two ``edge_sources`` is not counted twice.
     """
     src, dst = edge_index
     if wanted_type is not None:
@@ -187,7 +198,7 @@ def _mean_over_incoming(
     count = torch.zeros(n, device=x.device, dtype=x.dtype).index_add_(
         0, dst, torch.ones(dst.shape[0], device=x.device, dtype=x.dtype)
     )
-    return total / count.clamp_min(1.0).unsqueeze(1)
+    return total / count.clamp_min(1.0).unsqueeze(1), count
 
 
 class ResidualAdapterEncoder(nn.Module):
@@ -207,16 +218,31 @@ class ResidualAdapterEncoder(nn.Module):
         layer starts at std 1e-3 / zero bias, so ``h`` is a small, smooth function of ``x̂`` at
         initialization (``normalize(h)`` is still unit length, so ``z`` is SapBERT plus a
         ``sqrt(lambda)``-scaled, input-dependent block, not a small perturbation).
-        ``relational``: reserved for Phase 5.3 and rejected here.
+        ``relational``: trainable directional graph adapter (Phase 5.3), see below.
+
+    Relational adapter (``directional=True``; ``a`` = ``adapter_dim``, ``d`` = text width)::
+
+        a_n = [ x̂_n ; p_n ; c_n ; x̂_n ⊙ p_n ; log(1+n_children) ; log(1+n_parents) ]   (4d + 2)
+              p_n = mean of x̂ over parents,  c_n = mean of x̂ over children
+        u_n = W_in a_n + b_in                                                            (a)
+        r_n = W_par · mean_{parents(n)} u  +  W_chi · mean_{children(n)} u               (a)
+        h_n = MLP_2( LayerNorm( u_n + r_n ) )                       MLP_2 = Linear-ReLU-Dropout-Linear
+
+    ``W_par`` and ``W_chi`` are the separate parent/child weights of the one relational layer. The
+    input projection ``W_in`` comes first so the residual ``u_n + r_n`` has matching width (a raw
+    ``4d + 2`` residual would need ~9M extra weights). With ``directional=False`` the control A6
+    collapses it to one undirected relation: ``a_n = [x̂_n ; m_n ; x̂_n ⊙ m_n ; log(1+deg)]``
+    (``3d + 1``, ``m_n`` = mean over all neighbours) and one weight ``W_nbr``. The last ``MLP_2``
+    layer starts at std 1e-3 like the Phase 5.2 adapter.
 
     Args:
         adapter: ``neighbor_mean``, ``mlp`` or ``relational``.
         lam: Fixed global residual weight ``lambda`` (``>= 0``).
-        adapter_dim: Hidden/output width ``a`` of the ``mlp`` adapter (unused by ``neighbor_mean``).
-        directional: When true, ``neighbor_mean`` uses ``h = [mean parents ; mean children]``
-            instead of the undirected neighbour mean.
-        text_dim: Width of the text input ``x̂`` (needed to size the ``mlp``).
-        adapter_dropout: Dropout inside the ``mlp`` adapter (train mode only).
+        adapter_dim: Hidden/output width ``a`` of the trainable adapters (unused by ``neighbor_mean``).
+        directional: When true, ``neighbor_mean`` uses ``h = [mean parents ; mean children]`` and
+            ``relational`` uses separate parent/child weights; false collapses both to one undirected relation.
+        text_dim: Width of the text input ``x̂`` (needed to size the trainable adapters).
+        adapter_dropout: Dropout inside the trainable adapters (train mode only).
 
     Raises:
         ValueError: On an unknown adapter, a not-yet-implemented adapter, or negative ``lam``.
@@ -235,8 +261,6 @@ class ResidualAdapterEncoder(nn.Module):
         super().__init__()
         if adapter not in _ADAPTERS:
             raise ValueError(f"Unknown adapter '{adapter}'; expected one of {list(_ADAPTERS)}")
-        if adapter == "relational":
-            raise ValueError("adapter 'relational' is not implemented yet (Phase 5.3)")
         if lam < 0:
             raise ValueError(f"lambda must be >= 0, got {lam}")
         self.adapter = adapter
@@ -253,6 +277,45 @@ class ResidualAdapterEncoder(nn.Module):
             )
             nn.init.normal_(self.mlp[-1].weight, std=1e-3)
             nn.init.zeros_(self.mlp[-1].bias)
+        elif adapter == "relational":
+            in_dim = 4 * text_dim + 2 if directional else 3 * text_dim + 1
+            self.proj = nn.Linear(in_dim, adapter_dim)
+            if directional:
+                self.w_parent = nn.Linear(adapter_dim, adapter_dim, bias=False)
+                self.w_child = nn.Linear(adapter_dim, adapter_dim, bias=False)
+            else:
+                self.w_neighbor = nn.Linear(adapter_dim, adapter_dim, bias=False)
+            self.norm = nn.LayerNorm(adapter_dim)
+            self.mlp2 = nn.Sequential(
+                nn.Linear(adapter_dim, adapter_dim),
+                nn.ReLU(),
+                nn.Dropout(adapter_dropout),
+                nn.Linear(adapter_dim, adapter_dim),
+            )
+            nn.init.normal_(self.mlp2[-1].weight, std=1e-3)
+            nn.init.zeros_(self.mlp2[-1].bias)
+
+    def _relational_h(self, x_hat: torch.Tensor, edge_index: torch.Tensor, edge_type: torch.Tensor | None):
+        """Compute ``h`` for the ``relational`` adapter (equations in the class docstring)."""
+        if self.directional:
+            if edge_type is None:
+                raise ValueError("directional relational adapter needs edge_type")
+            parents, n_parents = _mean_and_count_over_incoming(x_hat, edge_index, edge_type, _PARENT_EDGE_TYPE)
+            children, n_children = _mean_and_count_over_incoming(x_hat, edge_index, edge_type, _CHILD_EDGE_TYPE)
+            a = torch.cat(
+                [x_hat, parents, children, x_hat * parents, torch.log1p(n_children)[:, None], torch.log1p(n_parents)[:, None]],
+                dim=1,
+            )
+            u = self.proj(a)
+            mean_par = _mean_over_incoming(u, edge_index, edge_type, _PARENT_EDGE_TYPE)
+            mean_chi = _mean_over_incoming(u, edge_index, edge_type, _CHILD_EDGE_TYPE)
+            r = self.w_parent(mean_par) + self.w_child(mean_chi)
+        else:
+            neighbors, degree = _mean_and_count_over_incoming(x_hat, edge_index, None, None)
+            a = torch.cat([x_hat, neighbors, x_hat * neighbors, torch.log1p(degree)[:, None]], dim=1)
+            u = self.proj(a)
+            r = self.w_neighbor(_mean_over_incoming(u, edge_index, None, None))
+        return self.mlp2(self.norm(u + r))
 
     def forward(
         self,
@@ -272,15 +335,17 @@ class ResidualAdapterEncoder(nn.Module):
                 1 = reversed). Required when ``directional``.
 
         Returns:
-            ``(n, d + d_h)`` with ``d_h`` = ``adapter_dim`` (``mlp``), ``d`` (undirected
+            ``(n, d + d_h)`` with ``d_h`` = ``adapter_dim`` (``mlp``, ``relational``), ``d`` (undirected
             ``neighbor_mean``) or ``2d`` (directional); ``d`` is the text width.
 
         Raises:
-            ValueError: If ``directional`` and ``edge_type`` is ``None``.
+            ValueError: If ``directional`` and ``edge_type`` is ``None`` (``neighbor_mean``, ``relational``).
         """
         x_hat = _unit(text_emb.detach())
         if self.adapter == "mlp":
             return torch.cat([x_hat, (self.lam**0.5) * _unit(self.mlp(x_hat))], dim=1)
+        if self.adapter == "relational":
+            return torch.cat([x_hat, (self.lam**0.5) * _unit(self._relational_h(x_hat, edge_index, edge_type))], dim=1)
         if self.directional:
             if edge_type is None:
                 raise ValueError("directional neighbor_mean needs edge_type")

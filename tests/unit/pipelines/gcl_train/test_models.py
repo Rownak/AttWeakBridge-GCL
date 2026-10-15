@@ -111,8 +111,6 @@ def test_residual_adapter_has_no_trainable_params_and_rejects_bad_config():
     model = build_residual_adapter_encoder(lam=0.5)
     assert sum(p.numel() for p in model.parameters()) == 0
     with pytest.raises(ValueError):
-        build_residual_adapter_encoder(adapter="relational")
-    with pytest.raises(ValueError):
         build_residual_adapter_encoder(adapter="nope")
     with pytest.raises(ValueError):
         build_residual_adapter_encoder(lam=-1.0)
@@ -151,3 +149,74 @@ def test_mlp_adapter_lambda_zero_gives_zero_gradient_on_adapter():
     z.pow(2).sum().backward()
     assert all(p.grad is None or torch.count_nonzero(p.grad) == 0 for p in model.parameters())
     assert torch.isfinite(z).all()
+
+
+# ---- relational adapter (A4 / A6) ---------------------------------------------------------------
+
+
+def _bare_relational(directional: bool, d: int = 3, a: int = 4):
+    """Relational adapter with LayerNorm/MLP_2 removed, so h = u + r and the relational term is visible."""
+    model = build_residual_adapter_encoder(
+        adapter="relational", lam=1.0, adapter_dim=a, text_dim=d, directional=directional, adapter_dropout=0.0
+    )
+    model.norm = torch.nn.Identity()
+    model.mlp2 = torch.nn.Identity()
+    model.eval()
+    return model
+
+
+def test_relational_export_layout_is_text_block_then_scaled_unit_residual():
+    text, edge_index, edge_type = _chain_fixture()
+    model = build_residual_adapter_encoder(adapter="relational", lam=0.25, adapter_dim=5, text_dim=3)
+    model.eval()
+    z = model(text * 2.0, text, edge_index, edge_type)
+    assert z.shape == (3, 3 + 5)
+    assert torch.allclose(z[:, :3], text)
+    assert torch.allclose(z[:, 3:].norm(dim=1), torch.full((3,), 0.5), atol=1e-5)  # sqrt(0.25) * unit
+
+
+def test_relational_layer_uses_separate_weights_for_parents_and_children():
+    text, edge_index, edge_type = _chain_fixture()  # node 0 = leaf (parent 1), node 2 = root (child 1)
+    model = _bare_relational(directional=True)
+
+    def h_with(w_parent_on: bool, w_child_on: bool) -> torch.Tensor:
+        torch.manual_seed(0)
+        with torch.no_grad():
+            model.w_parent.weight.copy_(torch.eye(4) if w_parent_on else torch.zeros(4, 4))
+            model.w_child.weight.copy_(torch.eye(4) if w_child_on else torch.zeros(4, 4))
+        return model._relational_h(text, edge_index, edge_type)
+
+    both, only_parent, only_child, neither = h_with(True, True), h_with(True, False), h_with(False, True), h_with(False, False)
+    # Leaf (node 0) has a parent but no children: only W_par can matter.
+    assert not torch.allclose(only_parent[0], neither[0]) and torch.allclose(only_child[0], neither[0])
+    # Root (node 2) has a child but no parents: only W_chi can matter.
+    assert not torch.allclose(only_child[2], neither[2]) and torch.allclose(only_parent[2], neither[2])
+    # Middle node (1) has both, and the two sides contribute different amounts.
+    assert not torch.allclose(only_parent[1], only_child[1])
+    assert torch.allclose(both[1] - neither[1], (only_parent[1] - neither[1]) + (only_child[1] - neither[1]), atol=1e-6)
+
+
+def test_relational_undirected_control_has_one_relation_and_fewer_parameters():
+    directional = build_residual_adapter_encoder(adapter="relational", adapter_dim=8, text_dim=4, directional=True)
+    undirected = build_residual_adapter_encoder(adapter="relational", adapter_dim=8, text_dim=4, directional=False)
+    assert hasattr(directional, "w_parent") and hasattr(directional, "w_child")
+    assert hasattr(undirected, "w_neighbor") and not hasattr(undirected, "w_parent")
+    assert directional.proj.in_features == 4 * 4 + 2 and undirected.proj.in_features == 3 * 4 + 1
+    text, edge_index, edge_type = _chain_fixture()
+    small = build_residual_adapter_encoder(adapter="relational", adapter_dim=8, text_dim=3, directional=False).eval()
+    assert small(text, text, edge_index).shape == (3, 3 + 8)  # undirected needs no edge_type
+
+
+def test_relational_adapter_is_trainable_and_needs_edge_type_when_directional():
+    model = build_residual_adapter_encoder(adapter="relational", adapter_dim=16, text_dim=3, directional=True)
+    assert sum(p.numel() for p in model.parameters() if p.requires_grad) > 0
+    text, edge_index, _ = _chain_fixture()
+    with pytest.raises(ValueError):
+        model(text, text, edge_index)
+
+
+def test_relational_adapter_lambda_zero_has_zero_gradient():
+    text, edge_index, edge_type = _chain_fixture()
+    model = build_residual_adapter_encoder(adapter="relational", lam=0.0, adapter_dim=6, text_dim=3)
+    model(text, text, edge_index, edge_type).pow(2).sum().backward()
+    assert all(p.grad is None or torch.count_nonzero(p.grad) == 0 for p in model.parameters())

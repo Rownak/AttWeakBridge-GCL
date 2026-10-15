@@ -52,6 +52,23 @@ Note on initialisation: `ĥ` is length-normalised, so the 1e-3 last-layer init m
 At step 0, `z` is SapBERT plus a `sqrt(lambda)`-scaled block that is a smooth function of `x̂` (not a tiny perturbation).
 `lambda = 0` is the only setting that makes `z` exactly SapBERT (tested: zero gradient on the adapter).
 
+A3 uses the same output vector as A4, but it ignores the graph completely: each concept's correction depends only on its own SapBERT vector. The final vector is `[SapBERT vector ; small correction vector]`.
+
+**How the correction is built**
+
+1. Take the concept's own SapBERT vector, scaled to unit length.
+2. Pass it through a small network: a layer that reduces it from 768 to 256 numbers, then a ReLU, layer normalisation, dropout (0.2), and a second layer that outputs 256 numbers.
+3. Scale that output to unit length and multiply by √0.25. This is the correction vector.
+
+The last layer starts with tiny weights. The correction is scaled to unit length afterwards, so at step 0 it is still a full-size block (√0.25), not a small perturbation. Only at weight 0 does the vector equal SapBERT exactly.
+
+**How it is trained.** SapBERT stays frozen and only the small network learns (about 263,000 parameters). The goal is the same as for A4: for each known NCIT–DOID pair, the NCIT concept should be closer to its DOID partner than to every other DOID concept, and the reverse. Other valid partners of the same concept are excluded. It trains for 50 epochs with temperature 0.05.
+
+**What it tests.** A3 measures what supervision alone adds, with no graph. It is the control for A4. Because A3 and A4 trained the same way and scored the same on val, the graph added nothing beyond supervision.
+
+**Outcome.** Val MRR was 0.478, against SapBERT's 0.413. It also beat the training-free neighbour mean (0.456).
+
+
 ## 2. What was implemented
 
 - [models.py](../../src/cga/pipelines/gcl_train/models.py): `mlp` adapter (above); constructor takes `text_dim` and
