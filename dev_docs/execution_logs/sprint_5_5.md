@@ -164,7 +164,7 @@ No NaN in any run.
 
 ### 3.3 Test readout (3,280 pairs, once), evaluate run `20261015T203126Z-cfe2330e`
 
-The test numbers of A0, A1, A3 and A4 equal Phase 5.4 exactly (same models). A13 was not read on test, as planned.
+The test numbers of A0, A1, A3 and A4 equal Phase 5.4 exactly (same models). A13 was not in the test experiment, as planned. **Correction:** the pool diagnostic in section 4 was run with A13 on the test split too, so A13's test MRR (0.4997 ± 0.0078 global) was printed there. This was not planned, and nothing was selected or decided from it.
 
 **global**
 
@@ -270,7 +270,7 @@ MRR, mean ± std over seeds (A0 and A1 have no seeds):
   the edge of the grid.
 - **A12 vs the plan's selection rule.** A12 has the highest test MRR but a 37% break rate on SapBERT-correct queries and no floor.
   Whether MRR or safety matters more is the developer's call, and I make no claim that A12 replaces A3 or A11.
-- **A13 was not read on test**, as planned.
+- **A13's test MRR was seen once, unplanned**, in the section 4 pool diagnostic (see the correction in section 3.3). It was not in the test experiment and no decision depends on it.
 - **The shortcut check (section 4)** rules out one specific mechanism, not every leak. The training is also transductive:
   test nodes take part in message passing as features only.
 - The GCN uses the symmetrized edge list with duplicates (as the paper's `gcn` encoder does), while `relational` collapses them.

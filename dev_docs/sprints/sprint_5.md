@@ -381,7 +381,7 @@ where A4 broke many.
 **Capability:** `ResidualAdapterEncoder` gains `adapter: gat`, which reuses the existing `GAT` class unchanged.
 `residual_floor` and `edge_rewire` are reused from Phases 5.5 and 5.3.
 
-- [ ] `adapter: gat` (built like the 5.5 `gcn` adapter, with the tower swapped):
+- [x] `adapter: gat` (built like the 5.5 `gcn` adapter, with the tower swapped):
   - `t_n = Linear(768 → 256)(x̂_n)` (the paper's `fc1`);
   - `g = GAT(x̂, edge_index)`: the existing 2-layer `GAT` tower:
     - layer 1 is `GATConv(768 → 256 / H, heads=H)`, concatenated to 256;
@@ -393,7 +393,7 @@ where A4 broke many.
   - the per-head width `256 / H` keeps the tower about the same size as A11's GCN, at about 590k parameters in total.
     So A14 vs A11 compares attention against averaging, not model size. `adapter_dim` must be divisible by `H`;
     otherwise raise a `ValueError`.
-- [ ] Runs, with the same objective and settings as 5.5 (`infonce_full`, τ 0.05, reverse weight 0.5, Adam lr 1e-3,
+- [x] Runs, with the same objective and settings as 5.5 (`infonce_full`, τ 0.05, reverse weight 0.5, Adam lr 1e-3,
       weight decay 1e-4, λ 0.25, seeds 42/43/44):
   - **A14** SRGA-GAT: 50 epochs (same as A11). `model_id = srga-gat-l0.25-s<seed>`.
   - **A15** GAT without the floor:
@@ -404,22 +404,22 @@ where A4 broke many.
   - **A16** A14 on a rewired graph (`edge_rewire.enabled=true`, `seed=<seed>`). `model_id = srga-gat-rewired-l0.25-s<seed>`.
   - New experiment `configs/experiments/ncit_doid_srga_gat.yaml` (A0, A3, A11, A12, A14, A15, A16; `gold_val` +
     `gold_train`), and `ncit_doid_srga_gat_sel.yaml` for the A15 epoch grid.
-- [ ] Val analysis:
+- [x] Val analysis:
   - mean ± std table;
   - paired wins/losses against A0, and A14 vs A11, A15 vs A12, A14 vs A16 (`scripts/srga_paired_ranks.py`).
-- [ ] Test, once per finished configuration, after the val table is recorded:
+- [x] Test, once per finished configuration, after the val table is recorded:
   - add A14 and A15 to `ncit_doid_srga_compare.yaml` and evaluate;
   - compare against the Phase 5.4/5.5 rows (same test pairs, same models);
   - run `scripts/srga_stratified.py` for A14 and A15 next to A11 and A12;
   - run `scripts/srga_pool_diagnostic.py` (held-out-only / trainable-only pools) for A14 and A15, as in 5.5 §4.
-- [ ] Attention readout (analysis only, no pipeline change): a script that rebuilds one A14 model per seed from its
+- [x] Attention readout (analysis only, no pipeline change): a script that rebuilds one A14 model per seed from its
       final checkpoint and reads the first-layer attention weights (`GATConv(..., return_attention_weights=True)`).
   - Report the mean attention mass each node gives to its self-loop, its parents (`edge_type` 1) and its children
     (`edge_type` 0), split by graph role.
   - Also report it for the val/test query sources whose SapBERT top confuser is a 1-hop neighbour, compared with all
     other sources.
   - This shows whether attention learned to treat parents and children differently, which the undirected GCN cannot do.
-- [ ] Tests (`test_models.py`, `test_pipeline.py`):
+- [x] Tests (`test_models.py`, `test_pipeline.py`):
   - the `gat` output has 768 + 256 columns and its SapBERT block is the unit text vector;
   - its `h` changes when edges change;
   - the parameter count matches the GCN adapter within 1%;

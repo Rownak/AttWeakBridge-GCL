@@ -328,15 +328,16 @@ def test_relational_run_with_edge_rewire_calls_rewire_only_when_enabled(tmp_path
     assert calls == [1]  # called once, for the rewired run only, with the configured seed
 
 
-def _gcn_adapter_config(tmp_path, *, residual_floor: bool, rewire: bool = False):
+def _gcn_adapter_config(tmp_path, *, residual_floor: bool, rewire: bool = False, adapter: str = "gcn"):
     from cga.data.schemas import ALIGNMENTS_SCHEMA
 
     config = _build_config(tmp_path, epochs=3)
     config["gcl_train"]["model"] = {
         "encoder": "residual_adapter",
-        "adapter": "gcn",
+        "adapter": adapter,
         "lambda": 0.25,
         "adapter_dim": 8,
+        "gat_heads": [2, 1],
         "residual_floor": residual_floor,
         "model_id": "srga-gcn-test",
         "edge_rewire": {"enabled": rewire, "seed": 1},
@@ -367,4 +368,19 @@ def test_gcn_adapter_infonce_full_run_end_to_end(tmp_path, residual_floor, width
 
 def test_gcn_adapter_with_edge_rewire_runs(tmp_path):
     ctx = _run_gcl_train(_gcn_adapter_config(tmp_path, residual_floor=True, rewire=True))
+    assert AlignedMatrix.load(ctx.run_dir / "node_embeddings").vectors.shape == (len(ALL_IDS), 6 + 8)
+
+
+@pytest.mark.parametrize("residual_floor, width", [(True, 6 + 8), (False, 8)])
+def test_gat_adapter_infonce_full_run_end_to_end(tmp_path, residual_floor, width):
+    ctx = _run_gcl_train(_gcn_adapter_config(tmp_path, residual_floor=residual_floor, adapter="gat"))
+
+    matrix = AlignedMatrix.load(ctx.run_dir / "node_embeddings")
+    assert matrix.vectors.shape == (len(ALL_IDS), width)
+    assert np.isfinite(matrix.vectors).all()
+    assert read_json(ctx.run_dir / "manifest.json")["summary"]["n_trainable_params"] > 0
+
+
+def test_gat_adapter_with_edge_rewire_runs(tmp_path):
+    ctx = _run_gcl_train(_gcn_adapter_config(tmp_path, residual_floor=True, rewire=True, adapter="gat"))
     assert AlignedMatrix.load(ctx.run_dir / "node_embeddings").vectors.shape == (len(ALL_IDS), 6 + 8)

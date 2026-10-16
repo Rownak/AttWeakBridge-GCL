@@ -9,6 +9,8 @@
 # runner-up A1 (above), and A4 as a declared structural reference (not a selection candidate).
 # Phase 5.5 adds A11 (paper GCN branch beside SapBERT) and A12 (same branch, no SapBERT floor, 200 epochs),
 # 3 seeds each, read once after their val table was recorded.
+# Phase 5.6 adds A14 (paper GAT branch beside SapBERT) and A15 (same branch, no floor, 100 epochs), 3 seeds each,
+# likewise read once after their val table was recorded.
 evaluate:
   methods:
     - {method_id: sapbert,   label: "SapBERT (A0)",     kind: embedding_store, embedder_id: hf_mean_pool-sapbert,   ref: latest}
@@ -27,6 +29,12 @@ evaluate:
     - {method_id: gcn-full-e200-s42, label: "A12 GCN no-floor s42", kind: gcl_run, model_id: gcn-full-e200-s42, ref: latest}
     - {method_id: gcn-full-e200-s43, label: "A12 GCN no-floor s43", kind: gcl_run, model_id: gcn-full-e200-s43, ref: latest}
     - {method_id: gcn-full-e200-s44, label: "A12 GCN no-floor s44", kind: gcl_run, model_id: gcn-full-e200-s44, ref: latest}
+    - {method_id: srga-gat-l0.25-s42, label: "A14 GAT l=0.25 s42", kind: gcl_run, model_id: srga-gat-l0.25-s42, ref: latest}
+    - {method_id: srga-gat-l0.25-s43, label: "A14 GAT l=0.25 s43", kind: gcl_run, model_id: srga-gat-l0.25-s43, ref: latest}
+    - {method_id: srga-gat-l0.25-s44, label: "A14 GAT l=0.25 s44", kind: gcl_run, model_id: srga-gat-l0.25-s44, ref: latest}
+    - {method_id: gat-full-e100-s42, label: "A15 GAT no-floor s42", kind: gcl_run, model_id: gat-full-e100-s42, ref: latest}
+    - {method_id: gat-full-e100-s43, label: "A15 GAT no-floor s43", kind: gcl_run, model_id: gat-full-e100-s43, ref: latest}
+    - {method_id: gat-full-e100-s44, label: "A15 GAT no-floor s44", kind: gcl_run, model_id: gat-full-e100-s44, ref: latest}
   evaluations:
     - evaluation_id: gold_val
       kind: gold_alignment

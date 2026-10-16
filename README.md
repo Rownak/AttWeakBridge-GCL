@@ -231,8 +231,8 @@ sources (all their pairs) to `val`, whose endpoints are held out like test. Ever
 (`gcl_train.model.encoder: residual_adapter`) exports `z = [x̂ ; sqrt(lambda) * normalize(h)]`: the
 frozen SapBERT vector next to a graph/learned correction `h`, so `lambda = 0` ranks exactly like
 SapBERT. Adapters: `neighbor_mean` (parameter-free, optional `directional`), `mlp` (no edges),
-`relational` (parent/child relational layer) and `gcn` (the paper's text branch: `fc1`, the 2-layer `GCN` tower and `fc3`;
-`model.residual_floor: false` drops the SapBERT block); `loss.name: infonce_full` trains with full-softmax
+`relational` (parent/child relational layer), `gcn` and `gat` (the paper's text branch: `fc1`, the 2-layer `GCN`/`GAT`
+tower and `fc3`; `model.residual_floor: false` drops the SapBERT block); `loss.name: infonce_full` trains with full-softmax
 InfoNCE over every non-held-out candidate, and `model.edge_rewire` gives a degree-preserving rewired
 control. Design, plan and results:
 [dev_docs/design_docs/sapbert_residual_graph_adapter.md](dev_docs/design_docs/sapbert_residual_graph_adapter.md),
@@ -255,6 +255,7 @@ uv run cga run plot --dataset ncit_doid_srga --config configs/plots/ncit_doid_sr
 uv run python scripts/srga_paired_ranks.py --dataset ncit_doid_srga --split val   --group A3="srga-mlp-l0.25-s{seed}"   # paired wins/losses vs SapBERT
 uv run python scripts/srga_stratified.py --dataset ncit_doid_srga --split test   --group A3="srga-mlp-l0.25-s{seed}"  # fixed/broken by stratum
 uv run python scripts/srga_pool_diagnostic.py --dataset ncit_doid_srga --split val   --group A3="srga-mlp-l0.25-s{seed}"   # MRR on all / held-out-only / trainable-only candidate pools
+uv run python scripts/srga_gat_attention.py --dataset ncit_doid_srga --split test   --model-id "srga-gat-l0.25-s{seed}"   # what the GAT adapter attends to (descriptive)
 ```
 
 In `--set`, write small floats as `0.0001`, not `1e-4` (YAML reads the latter as a string).
