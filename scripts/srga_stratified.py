@@ -31,7 +31,7 @@ import numpy as np
 
 from cga.data.aligned import AlignedMatrix
 from cga.data.graph_store import read_edges
-from srga_paired_ranks import _latest, query_ranks  # noqa: E402  (sibling script on sys.path)
+from srga_paired_ranks import _latest, add_fusions, query_ranks  # noqa: E402  (sibling script on sys.path)
 
 
 def _within_hops(adj: dict[str, set[str]], start: str, goal: str, max_hops: int) -> bool:
@@ -58,6 +58,7 @@ def main() -> None:
     ap.add_argument("--dataset", default="ncit_doid_srga")
     ap.add_argument("--split", default="test")
     ap.add_argument("--group", action="append", required=True, help="LABEL=model_id with '{seed}'")
+    ap.add_argument("--fuse", action="append", default=[], help="NAME=GROUP[:weight],... score-level fusion of groups")
     ap.add_argument("--seeds", type=int, nargs="+", default=[42, 43, 44])
     ap.add_argument("--max-hops", type=int, default=2)
     args = ap.parse_args()
@@ -74,6 +75,10 @@ def main() -> None:
             run = _latest(root / "models" / "gcl" / args.dataset / pattern.format(seed=seed))
             matrices[name] = AlignedMatrix.load(run / "node_embeddings")
             groups[label].append(name)
+    add_fusions(matrices, groups, args.fuse)
+    # Only the fusions (if any were given) are reported; their members were loaded to build them.
+    if args.fuse:
+        groups = {k: v for k, v in groups.items() if k in {f.split("=")[0] for f in args.fuse}}
 
     queries, ranks, confusers = query_ranks(matrices, ingest_dir, args.split)
 
@@ -109,7 +114,7 @@ def main() -> None:
                 broken = int(np.sum((b == 1) & (v > 1)))
                 per_seed.append((fixed, broken, len(v) - fixed - broken, int(np.sum(v < b)), int(np.sum(v > b))))
             arr = np.array(per_seed, dtype=float)
-            m, s = arr.mean(axis=0), arr.std(axis=0, ddof=1)
+            m, s = arr.mean(axis=0), arr.std(axis=0, ddof=1 if len(arr) > 1 else 0)
             cells = " | ".join(f"{mi:.1f} +- {si:.1f}" for mi, si in zip(m, s))
             print(f"| {stratum} | {int(mask.sum())} | {cells} |")
 

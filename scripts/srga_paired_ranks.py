@@ -94,6 +94,25 @@ def query_ranks(
     return queries, ranks, confusers
 
 
+def add_fusions(matrices: dict[str, AlignedMatrix], groups: dict[str, list[str]], specs: list[str]) -> None:
+    """Add score-level fusions (Sprint 6.1) to ``matrices`` / ``groups`` in place.
+
+    Each spec is ``NAME=GROUP[:weight],GROUP[:weight]``; the fusion uses every seed of each named
+    group with that group's weight split equally over its seeds (the ``fusion`` method kind's
+    arithmetic), and appears as a one-entry group ``NAME``.
+    """
+    from cga.pipelines.evaluate.methods import fuse_matrices
+
+    for spec in specs:
+        name, body = spec.split("=", 1)
+        members = []
+        for part in body.split(","):
+            label, _, w = part.partition(":")
+            members += [(matrices[n], float(w or 1.0) / len(groups[label])) for n in groups[label]]
+        matrices[name] = fuse_matrices([m for m in members if m[1] > 0])
+        groups[name] = [name]
+
+
 def _mrr(r: np.ndarray) -> float:
     return float(np.mean(1.0 / r))
 

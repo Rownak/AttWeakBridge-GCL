@@ -29,7 +29,7 @@ from pathlib import Path
 import numpy as np
 
 from cga.data.aligned import AlignedMatrix, NodeUniverse
-from srga_paired_ranks import _latest, query_ranks
+from srga_paired_ranks import _latest, add_fusions, query_ranks
 
 
 def main() -> None:
@@ -38,6 +38,8 @@ def main() -> None:
     ap.add_argument("--dataset", default="ncit_doid_srga")
     ap.add_argument("--split", default="val")
     ap.add_argument("--group", action="append", required=True, help="LABEL=model_id, '{seed}' expands per seed")
+    ap.add_argument("--fuse", action="append", default=[], help="NAME=GROUP[:weight],... score-level fusion of groups")
+    ap.add_argument("--only", nargs="*", default=None, help="report only these labels (plus A0)")
     ap.add_argument("--seeds", type=int, nargs="+", default=[42, 43, 44])
     ap.add_argument("--sampler", default="supervised-negatives_per_positive5")
     args = ap.parse_args()
@@ -59,6 +61,9 @@ def main() -> None:
                 _latest(root / "models" / "gcl" / args.dataset / pattern.format(seed=seed)) / "node_embeddings"
             )
             groups[label].append(name)
+    add_fusions(matrices, groups, args.fuse)
+    if args.only is not None:
+        groups = {k: v for k, v in groups.items() if k == "A0" or k in args.only}
 
     pools = {"all": None, "held-out only": held, "trainable only": trainable}
     result: dict[str, dict[str, list[float]]] = {g: {p: [] for p in pools} for g in groups}
