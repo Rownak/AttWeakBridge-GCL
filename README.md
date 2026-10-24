@@ -256,6 +256,14 @@ uv run python scripts/srga_paired_ranks.py --dataset ncit_doid_srga --split val 
 uv run python scripts/srga_stratified.py --dataset ncit_doid_srga --split test   --group A3="srga-mlp-l0.25-s{seed}"  # fixed/broken by stratum
 uv run python scripts/srga_pool_diagnostic.py --dataset ncit_doid_srga --split val   --group A3="srga-mlp-l0.25-s{seed}"   # MRR on all / held-out-only / trainable-only candidate pools
 uv run python scripts/srga_gat_attention.py --dataset ncit_doid_srga --split test   --model-id "srga-gat-l0.25-s{seed}"   # what the GAT adapter attends to (descriptive)
+
+# Sprint 6: score-level fusion (`kind: fusion` in evaluate.methods), the anchor re-ranker (`gold_alignment_rerank`, gated),
+# the data-scaling control `gcl_train.train.pair_fraction` / `pair_seed` (default 1.0: all pairs), and the full-data lineage
+# `ncit_doid_srga_full` (all 1,406 gold train pairs train; same test split; copy the embedding stores without `shards/`).
+uv run python scripts/srga_fusion_bootstrap.py --dataset ncit_doid_srga --split val --group A11="srga-gcn-l0.25-s{seed}" --group A12="gcn-full-e200-s{seed}" --fuse A19=A11:0.5,A12:0.5 --compare A19:A12
+uv run python scripts/srga_scaling_curve.py --dataset ncit_doid_srga   # val MRR vs number of training pairs (pair_fraction runs)
+uv run cga run evaluate --dataset ncit_doid_srga_full --experiment ncit_doid_srga_full_test   # full-data models on test
+# --group LABEL=ncit_doid_srga_full::model_id{seed} in the srga_*.py scripts compares models of another lineage on the same queries.
 ```
 
 In `--set`, write small floats as `0.0001`, not `1e-4` (YAML reads the latter as a string).

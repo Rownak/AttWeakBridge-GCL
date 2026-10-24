@@ -1,0 +1,34 @@
+# Sprint 6 Phase 6.3 -- data-scaling curve: A11 and A12 recipes trained on 25/50/75/100% of the source nodes' train pairs
+# (gcl_train.train.pair_fraction), 3 seeds each. Val only; no test read. Run as:
+#   uv run cga run evaluate --dataset ncit_doid_srga --experiment ncit_doid_srga_scaling
+evaluate:
+  methods:
+    - {method_id: sapbert, label: "SapBERT (A0)", kind: embedding_store, embedder_id: hf_mean_pool-sapbert, ref: latest}
+    - {method_id: "scale-gcn-p25-s42", label: "A11 25% seed 42", kind: gcl_run, model_id: "scale-gcn-p25-s42", ref: latest}
+    - {method_id: "scale-gcn-p25-s43", label: "A11 25% seed 43", kind: gcl_run, model_id: "scale-gcn-p25-s43", ref: latest}
+    - {method_id: "scale-gcn-p25-s44", label: "A11 25% seed 44", kind: gcl_run, model_id: "scale-gcn-p25-s44", ref: latest}
+    - {method_id: "scale-gcn-p50-s42", label: "A11 50% seed 42", kind: gcl_run, model_id: "scale-gcn-p50-s42", ref: latest}
+    - {method_id: "scale-gcn-p50-s43", label: "A11 50% seed 43", kind: gcl_run, model_id: "scale-gcn-p50-s43", ref: latest}
+    - {method_id: "scale-gcn-p50-s44", label: "A11 50% seed 44", kind: gcl_run, model_id: "scale-gcn-p50-s44", ref: latest}
+    - {method_id: "scale-gcn-p75-s42", label: "A11 75% seed 42", kind: gcl_run, model_id: "scale-gcn-p75-s42", ref: latest}
+    - {method_id: "scale-gcn-p75-s43", label: "A11 75% seed 43", kind: gcl_run, model_id: "scale-gcn-p75-s43", ref: latest}
+    - {method_id: "scale-gcn-p75-s44", label: "A11 75% seed 44", kind: gcl_run, model_id: "scale-gcn-p75-s44", ref: latest}
+    - {method_id: "scale-gcn-p100-s42", label: "A11 100% seed 42", kind: gcl_run, model_id: "scale-gcn-p100-s42", ref: latest}
+    - {method_id: "scale-gcn-p100-s43", label: "A11 100% seed 43", kind: gcl_run, model_id: "scale-gcn-p100-s43", ref: latest}
+    - {method_id: "scale-gcn-p100-s44", label: "A11 100% seed 44", kind: gcl_run, model_id: "scale-gcn-p100-s44", ref: latest}
+    - {method_id: "scale-gcn-nofloor-p25-s42", label: "A12 25% seed 42", kind: gcl_run, model_id: "scale-gcn-nofloor-p25-s42", ref: latest}
+    - {method_id: "scale-gcn-nofloor-p25-s43", label: "A12 25% seed 43", kind: gcl_run, model_id: "scale-gcn-nofloor-p25-s43", ref: latest}
+    - {method_id: "scale-gcn-nofloor-p25-s44", label: "A12 25% seed 44", kind: gcl_run, model_id: "scale-gcn-nofloor-p25-s44", ref: latest}
+    - {method_id: "scale-gcn-nofloor-p50-s42", label: "A12 50% seed 42", kind: gcl_run, model_id: "scale-gcn-nofloor-p50-s42", ref: latest}
+    - {method_id: "scale-gcn-nofloor-p50-s43", label: "A12 50% seed 43", kind: gcl_run, model_id: "scale-gcn-nofloor-p50-s43", ref: latest}
+    - {method_id: "scale-gcn-nofloor-p50-s44", label: "A12 50% seed 44", kind: gcl_run, model_id: "scale-gcn-nofloor-p50-s44", ref: latest}
+    - {method_id: "scale-gcn-nofloor-p75-s42", label: "A12 75% seed 42", kind: gcl_run, model_id: "scale-gcn-nofloor-p75-s42", ref: latest}
+    - {method_id: "scale-gcn-nofloor-p75-s43", label: "A12 75% seed 43", kind: gcl_run, model_id: "scale-gcn-nofloor-p75-s43", ref: latest}
+    - {method_id: "scale-gcn-nofloor-p75-s44", label: "A12 75% seed 44", kind: gcl_run, model_id: "scale-gcn-nofloor-p75-s44", ref: latest}
+    - {method_id: "scale-gcn-nofloor-p100-s42", label: "A12 100% seed 42", kind: gcl_run, model_id: "scale-gcn-nofloor-p100-s42", ref: latest}
+    - {method_id: "scale-gcn-nofloor-p100-s43", label: "A12 100% seed 43", kind: gcl_run, model_id: "scale-gcn-nofloor-p100-s43", ref: latest}
+    - {method_id: "scale-gcn-nofloor-p100-s44", label: "A12 100% seed 44", kind: gcl_run, model_id: "scale-gcn-nofloor-p100-s44", ref: latest}
+  evaluations:
+    - evaluation_id: gold_val
+      kind: gold_alignment
+      params: {ks: [1, 5, 10], split: val, modes: [global]}

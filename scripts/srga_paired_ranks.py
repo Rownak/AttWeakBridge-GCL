@@ -30,6 +30,17 @@ def _latest(lineage: Path) -> Path:
     return lineage / (lineage / "LATEST").read_text(encoding="utf-8").strip()
 
 
+def model_run_dir(root: Path, default_dataset: str, pattern: str, seed: int | None) -> Path:
+    """Return a trained model's latest run directory; ``pattern`` may be ``lineage::model_id`` (Sprint 6.3).
+
+    A bare ``model_id`` is looked up in ``default_dataset``; ``ncit_doid_srga_full::full-gcn-l0.25-s{seed}`` names
+    a model of another lineage. The query set always comes from the ``--dataset`` ingest, so cross-lineage groups
+    are compared on identical test queries.
+    """
+    dataset, _, name = pattern.rpartition("::")
+    return _latest(root / "models" / "gcl" / (dataset or default_dataset) / name.format(seed=seed))
+
+
 def query_ranks(
     matrices: dict[str, AlignedMatrix],
     ingest_dir: Path,
@@ -122,7 +133,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--dataset", default="ncit_doid_srga")
     ap.add_argument("--split", default="val")
-    ap.add_argument("--group", action="append", required=True, help="LABEL=model_id, '{seed}' expands per seed")
+    ap.add_argument("--group", action="append", required=True, help="LABEL=[lineage::]model_id, '{seed}' expands per seed")
     ap.add_argument("--seeds", type=int, nargs="+", default=[42, 43, 44])
     args = ap.parse_args()
 
@@ -136,7 +147,7 @@ def main() -> None:
         for seed in args.seeds if "{seed}" in pattern else [None]:
             model_id = pattern.format(seed=seed)
             name = f"{label}:{seed}" if seed is not None else label
-            matrices[name] = AlignedMatrix.load(_latest(root / "models" / "gcl" / args.dataset / model_id) / "node_embeddings")
+            matrices[name] = AlignedMatrix.load(model_run_dir(root, args.dataset, pattern, seed) / "node_embeddings")
             names.append(name)
         columns[label] = names
 

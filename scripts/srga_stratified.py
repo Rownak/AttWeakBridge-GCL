@@ -31,7 +31,7 @@ import numpy as np
 
 from cga.data.aligned import AlignedMatrix
 from cga.data.graph_store import read_edges
-from srga_paired_ranks import _latest, add_fusions, query_ranks  # noqa: E402  (sibling script on sys.path)
+from srga_paired_ranks import _latest, model_run_dir, add_fusions, query_ranks  # noqa: E402  (sibling script on sys.path)
 
 
 def _within_hops(adj: dict[str, set[str]], start: str, goal: str, max_hops: int) -> bool:
@@ -72,7 +72,7 @@ def main() -> None:
         groups[label] = []
         for seed in args.seeds:
             name = f"{label}:{seed}"
-            run = _latest(root / "models" / "gcl" / args.dataset / pattern.format(seed=seed))
+            run = model_run_dir(root, args.dataset, pattern, seed)
             matrices[name] = AlignedMatrix.load(run / "node_embeddings")
             groups[label].append(name)
     add_fusions(matrices, groups, args.fuse)

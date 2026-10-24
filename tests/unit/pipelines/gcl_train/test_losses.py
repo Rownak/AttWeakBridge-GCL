@@ -170,3 +170,42 @@ def test_infonce_full_reverse_weight_is_respected_and_pairs_are_deduplicated():
     t1, _, _ = infonce_full_loss(_Z, data, temperature=1.0, reverse_weight=2.0)
     assert t0.item() == pytest.approx(fwd.item())
     assert t1.item() == pytest.approx(fwd.item() + 2.0 * rev.item())
+
+
+# --- pair_fraction (Sprint 6.3) ---------------------------------------------------------------------------
+
+from cga.pipelines.gcl_train.losses import sample_pairs_by_source  # noqa: E402
+
+_PAIRS = [(i, 100 + i) for i in range(20)] + [(3, 150), (3, 100 + 3)]  # source 3 has two targets, one duplicate
+
+
+def test_sample_pairs_fraction_one_is_the_deduplicated_input():
+    out = sample_pairs_by_source(_PAIRS, 1.0, seed=7)
+    assert out == list(dict.fromkeys(_PAIRS))
+
+
+def test_sample_pairs_is_deterministic_and_moves_whole_sources():
+    a = sample_pairs_by_source(_PAIRS, 0.5, seed=1)
+    assert a == sample_pairs_by_source(_PAIRS, 0.5, seed=1)
+    assert a != sample_pairs_by_source(_PAIRS, 0.5, seed=2)
+    kept_sources = {s for s, _ in a}
+    assert len(kept_sources) == 10  # round(0.5 * 20 distinct sources)
+    assert all(p in a for p in _PAIRS if p[0] in kept_sources)  # every pair of a kept source is kept (source 3: both)
+    assert all(s in kept_sources for s, _ in a)
+
+
+def test_sample_pairs_rejects_bad_fraction():
+    for bad in (0.0, -0.1, 1.5):
+        with pytest.raises(ValueError):
+            sample_pairs_by_source(_PAIRS, bad, seed=0)
+
+
+def test_dropped_pair_stays_in_the_gold_mask():
+    # Two sources (rows 0, 1) both aligned to target row 5 and row 6; source 0 also to row 7.
+    roles = ["g1", "g1", "g1", "g2", "g2", "g2", "g2", "g2"]
+    held = [False] * 8
+    gold = [(0, 5), (0, 7), (1, 6)]
+    data = build_full_softmax_data([(0, 5)], graph_roles=roles, held_out=held, gold_pairs=gold)
+    # Source 0's other gold target (7) is masked although its pair (0, 7) is not a training pair.
+    cols = {int(c) for r, c in zip(data.mask_fwd[0].tolist(), data.mask_fwd[1].tolist()) if r == 0}
+    assert data.cand_fwd[sorted(cols)[0]].item() == 7 and len(cols) == 1

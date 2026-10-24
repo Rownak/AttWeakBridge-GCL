@@ -49,6 +49,7 @@ class _EvaluateState:
         self.graph_role_by_node: dict[str, str] = {}
         self.graph: Any = None
         self.alignments: Any = None
+        self.edges: list[dict[str, Any]] = []  # directed edge rows (additive; ``graph`` stays undirected)
         self.digest = MetricsDigest()
         self.rows: list[MetricRow] = []
         self.ingest_run_id: str = ""
@@ -96,6 +97,7 @@ class LoadStep:
         )
 
         edges_table = read_edges(ingest_dir / "edges.parquet")
+        state.edges = edges_table.to_pylist()
         edge_pairs = list(
             zip(edges_table.column("src_id").to_pylist(), edges_table.column("dst_id").to_pylist())
         )

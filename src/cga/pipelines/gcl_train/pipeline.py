@@ -35,7 +35,7 @@ from cga.data.aligned import AlignedMatrix, NodeUniverse
 from cga.data.example_store import read_examples
 from cga.data.graph_store import read_alignments, read_edges
 from cga.pipelines.gcl_train import losses as _losses  # noqa: F401  (registers triplet/infonce/infonce_full)
-from cga.pipelines.gcl_train.losses import build_full_softmax_data
+from cga.pipelines.gcl_train.losses import build_full_softmax_data, sample_pairs_by_source
 from cga.pipelines.gcl_train.models import build_dual_encoder, build_residual_adapter_encoder
 from cga.pipelines.gcl_train.rewire import rewire_edges
 from cga.pipelines.gcl_train.trainer import ExampleTensors, sha256_of_universe, train_model
@@ -66,6 +66,7 @@ class _GclTrainState:
         self.edge_index: torch.Tensor | None = None
         self.edge_type: torch.Tensor | None = None
         self.n_trainable_params: int = 0
+        self.n_positive_pairs: int | None = None  # infonce_full only: distinct positive pairs trained on
         self.gold_pairs: list[tuple[int, int]] = []
         self.train_examples: ExampleTensors | None = None
         self.n_examples_total: int = 0
@@ -333,13 +334,21 @@ class TrainStep:
         full_data = None
         if loss_name == "infonce_full":
             examples = state.train_examples
-            full_data = build_full_softmax_data(
+            # Data-scaling control (default-off): train on a fraction of the source nodes' pairs only.
+            # The gold mask below still holds every pair, so dropped pairs are never false negatives.
+            pairs = sample_pairs_by_source(
                 list(zip(examples.anchor.tolist(), examples.text_pos.tolist())),
+                train_cfg.get("pair_fraction", 1.0),
+                train_cfg.get("pair_seed", 0),
+            )
+            full_data = build_full_softmax_data(
+                pairs,
                 graph_roles=state.universe.graph_roles,
                 held_out=state.universe.held_out,
                 gold_pairs=state.gold_pairs,
                 device=ctx.device,
             )
+            state.n_positive_pairs = len(full_data.anchor)
             ctx.logger.info(
                 "train: infonce_full with %d positive pairs, %d forward / %d reverse candidates",
                 len(full_data.anchor),
@@ -426,6 +435,7 @@ class ManifestStep:
             "n_examples": state.n_examples_total,
             "n_examples_train": state.n_examples_train,
             "n_trainable_params": state.n_trainable_params,
+            "n_positive_pairs": state.n_positive_pairs,
         }
 
 

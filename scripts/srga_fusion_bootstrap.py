@@ -25,7 +25,7 @@ import numpy as np
 
 from cga.data.aligned import AlignedMatrix
 from cga.pipelines.evaluate.methods import fuse_matrices
-from srga_paired_ranks import _latest, query_ranks
+from srga_paired_ranks import _latest, model_run_dir, query_ranks
 
 
 def bootstrap_diff(rr_a: np.ndarray, rr_b: np.ndarray, n_boot: int = 1000, seed: int = 0) -> tuple[float, float, float]:
@@ -59,7 +59,7 @@ def main() -> None:
         seed_names[label] = []
         for s in args.seeds:
             name = f"{label}:{s}"
-            path = _latest(root / "models" / "gcl" / args.dataset / pattern.format(seed=s)) / "node_embeddings"
+            path = model_run_dir(root, args.dataset, pattern, s) / "node_embeddings"
             matrices[name] = AlignedMatrix.load(path)
             seed_names[label].append(name)
     fused: dict[str, str] = {}

@@ -41,6 +41,27 @@ ranks the same up to per-node norms), as in the earlier phases.
   `n_children` counts type-0 neighbours (in-degree in the stored graph) and `n_parents` type-1 (out-degree).
 - Duplicate `(src, dst)` edges are collapsed before every mean and count.
 
+
+A4 keeps the frozen SapBERT vector of each concept as-is and adds a learned "graph correction" next to it. The final vector is `[SapBERT vector ; small correction vector]`.
+
+**How the correction is built**
+
+1. **Gather context from the concept's own ontology.** For each concept, the model collects:
+   - its own SapBERT vector;
+   - the average SapBERT vector of its parents;
+   - the average SapBERT vector of its children;
+   - a product of its own vector with its parents' average, which captures how similar it is to its parents;
+   - how many children and how many parents it has, as log counts.
+2. **Compress.** All of this is concatenated and projected down to 256 numbers, giving one summary per concept.
+3. **One round of message passing.** Each concept looks at the summaries of its parents and of its children, using separate learned weights for each side. It adds the weighted averages to its own summary, so parent and child information is not blended together.
+4. **Refine.** The result goes through layer normalisation and a small two-layer network (with dropout) to give the correction vector `h`. It is scaled to unit length and multiplied by √0.25.
+
+**How it is trained.** SapBERT stays frozen, and only the correction part (about 1M parameters) learns. The training goal is: for each known NCIT–DOID pair, the NCIT concept's vector should be more similar to its DOID partner than to any other DOID concept, and the reverse. Other valid partners of the same concept are excluded from the comparison.
+
+**Why this design.** At weight 0 the vector ranks exactly like SapBERT, so the graph can only help or be switched off. The correction can use the ontology structure, with parents and children kept separate.
+
+**Outcome.** On val it matched the version with no graph (A3) but not better, and a scrambled graph made it much worse.
+
 ### Loss and training (same as Phase 5.2)
 
 ```

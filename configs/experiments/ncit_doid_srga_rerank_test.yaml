@@ -1,0 +1,45 @@
+# Sprint 6 Phase 6.2 -- TEST readout of the anchor re-ranker (A21, A22, A23), both modes. NOT RUN: the probe gate stopped 6.2 before
+# any fitting (see dev_docs/execution_logs/sprint_6_2.md). To use it after a deliberate override, first run
+#   uv run python scripts/srga_rerank_fit.py          # writes artifacts/rerankers/ncit_doid_srga/A2{1..4}.json (val only)
+# then, only if the fit gate also passes (A21 > A23 with CI excluding 0, A24 < A21):
+#   uv run cga run evaluate --dataset ncit_doid_srga --experiment ncit_doid_srga_rerank_test   # test, once
+evaluate:
+  methods:
+    - {method_id: sapbert, label: "SapBERT (A0)", kind: embedding_store, embedder_id: hf_mean_pool-sapbert, ref: latest}
+    - method_id: "A17"
+      label: "A17 seed ensemble of A11"
+      kind: fusion
+      members:
+        - {kind: gcl_run, model_id: "srga-gcn-l0.25-s42", ref: latest, weight: 1}
+        - {kind: gcl_run, model_id: "srga-gcn-l0.25-s43", ref: latest, weight: 1}
+        - {kind: gcl_run, model_id: "srga-gcn-l0.25-s44", ref: latest, weight: 1}
+    - method_id: "A18"
+      label: "A18 seed ensemble of A12"
+      kind: fusion
+      members:
+        - {kind: gcl_run, model_id: "gcn-full-e200-s42", ref: latest, weight: 1}
+        - {kind: gcl_run, model_id: "gcn-full-e200-s43", ref: latest, weight: 1}
+        - {kind: gcl_run, model_id: "gcn-full-e200-s44", ref: latest, weight: 1}
+    - method_id: "A19"
+      label: "A19 = 0.5 A18 + 0.5 A17 (first stage)"
+      kind: fusion
+      members:
+        - {kind: gcl_run, model_id: "srga-gcn-l0.25-s42", ref: latest, weight: 0.5}
+        - {kind: gcl_run, model_id: "srga-gcn-l0.25-s43", ref: latest, weight: 0.5}
+        - {kind: gcl_run, model_id: "srga-gcn-l0.25-s44", ref: latest, weight: 0.5}
+        - {kind: gcl_run, model_id: "gcn-full-e200-s42", ref: latest, weight: 0.5}
+        - {kind: gcl_run, model_id: "gcn-full-e200-s43", ref: latest, weight: 0.5}
+        - {kind: gcl_run, model_id: "gcn-full-e200-s44", ref: latest, weight: 0.5}
+  evaluations:
+    - evaluation_id: gold_test_first_stage
+      kind: gold_alignment
+      params: {ks: [1, 5, 10], split: test, modes: [global, candidates]}
+    - evaluation_id: rerank_A21
+      kind: gold_alignment_rerank
+      params: &base {name: A21, first_stage: A19, score_methods: {sapbert: sapbert, a11: A17, a12: A18}, reranker: artifacts/rerankers/ncit_doid_srga/A21.json, ks: [1, 5, 10], split: test, modes: [global, candidates]}
+    - evaluation_id: rerank_A22
+      kind: gold_alignment_rerank
+      params: {<<: *base, name: A22, reranker: artifacts/rerankers/ncit_doid_srga/A22.json}
+    - evaluation_id: rerank_A23
+      kind: gold_alignment_rerank
+      params: {<<: *base, name: A23, reranker: artifacts/rerankers/ncit_doid_srga/A23.json}

@@ -15,6 +15,7 @@ the legacy approximation forward.
 
 from __future__ import annotations
 
+import random
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -75,6 +76,36 @@ def infonce_loss(
     logits = torch.cat([positive_logit, negative_logits], dim=1)
     labels = torch.zeros(logits.size(0), dtype=torch.long, device=anchor.device)
     return F.cross_entropy(logits, labels)
+
+
+def sample_pairs_by_source(pairs: list[tuple[int, int]], fraction: float, seed: int) -> list[tuple[int, int]]:
+    """Keep all pairs of a random ``fraction`` of the distinct source rows (the data-scaling control).
+
+    Whole sources move together so a source with several gold targets is never half-sampled. The
+    caller keeps the full ``gold_pairs`` for the mask, so a pair dropped here is still never scored as
+    a false negative, and its endpoints remain ordinary candidates.
+
+    Args:
+        pairs: Positive ``(source_row, target_row)`` pairs (duplicates are dropped, order is kept).
+        fraction: Share of distinct sources to keep, in ``(0, 1]``. ``1.0`` returns the pairs unchanged
+            (de-duplicated), which is the default behaviour of every earlier run.
+        seed: Seed of the draw; the same ``(pairs, fraction, seed)`` always gives the same subset.
+
+    Returns:
+        The kept pairs, in their original order.
+
+    Raises:
+        ValueError: If ``fraction`` is not in ``(0, 1]``.
+    """
+    if not 0.0 < fraction <= 1.0:
+        raise ValueError(f"pair_fraction must be in (0, 1], got {fraction}")
+    pairs = list(dict.fromkeys(pairs))
+    if fraction >= 1.0:
+        return pairs
+    sources = sorted({a for a, _ in pairs})
+    n_keep = max(1, round(fraction * len(sources)))
+    kept = set(random.Random(seed).sample(sources, n_keep))
+    return [p for p in pairs if p[0] in kept]
 
 
 @dataclass

@@ -166,27 +166,27 @@ Candidates beyond rank K keep their first-stage order after the re-ranked top-K,
 top-K is unchanged. The weights are fitted on **val** (211 queries). The first-stage models never trained on val, so their val
 scores are unbiased (train-pair scores are not, which is why train pairs are not used for fitting).
 
-- [ ] `evaluate/rerank.py`: feature extraction, listwise fit and apply. The evaluator resources gain the **directed** edge list
+- [x] `evaluate/rerank.py`: feature extraction, listwise fit and apply. The evaluator resources gain the **directed** edge list
       (additive; the existing undirected `res.graph` has no parent/child distinction).
-- [ ] `scripts/srga_rerank_fit.py`: 5-fold cross-validation grouped by source node over val, to choose `K in {10, 20, 50}` and
+- [x] `scripts/srga_rerank_fit.py`: 5-fold cross-validation grouped by source node over val, to choose `K in {10, 20, 50}` and
       `l2 in {0.01, 0.1, 1}`, then a final fit on all val; it writes `artifacts/rerankers/<dataset>/<name>.json` (weights, feature
       names and standardisation, K, l2, first-stage run ids) and prints the weights.
-- [ ] New evaluator kind `gold_alignment_rerank` (same metrics and modes as `gold_alignment`): params name the first-stage
+- [x] New evaluator kind `gold_alignment_rerank` (same metrics and modes as `gold_alignment`): params name the first-stage
       method, the re-ranker file and the split; it emits rows for the re-ranked method.
-- [ ] **Probe first**, before any fitting (analysis only, val and test coverage):
+- [x] **Probe first**, before any fitting (analysis only, val and test coverage):
   - what share of queries has an anchor within 1 and 2 hops (the design measured 85.9% and 63.7% at 2 hops on test);
   - among queries with the gold target in the top-K, how often agreement fires for the gold target against the first-stage top
     wrong candidate.
   - Apply the probe gate above.
-- [ ] Variants, all selected by CV on val and fitted on val:
+- [ ] Variants, all selected by CV on val and fitted on val:  *(not run: probe gate STOP, see sprint_6_2.md)*
   - **A21** full re-ranker (all feature groups).
   - **A22** A21 without the exclusivity group.
   - **A23** control: first-stage scores only, no anchors (learned score fusion).
   - **A24** control: A21 with the anchors' DOID partners shuffled among anchors (same endpoints, correspondences destroyed).
-- [ ] Test, once: **A21, A22 and A23.** A24 is val only.
+- [ ] Test, once: **A21, A22 and A23.** A24 is val only.  *(not run: probe gate STOP, see sprint_6_2.md)*
   - Compare against the first stage and the Sprint 5 bars.
   - Run `scripts/srga_stratified.py`, with attention to the "SapBERT wrong, confuser near" stratum.
-- [ ] Tests (`test_rerank.py`):
+- [x] Tests (`test_rerank.py`):
   - the feature values on a hand-built 2-graph fixture with known anchors (parent agreement, child agreement, granularity mismatch, exclusivity);
   - anchors exclude val and test pairs, and a query's own pair is never an anchor;
   - the re-ranked order beyond K is unchanged and a gold-outside-top-K query is unchanged;
@@ -217,29 +217,29 @@ negatives by construction).
 performance scales with the number of training pairs. The test pairs and the embedding stores are unchanged, so the
 comparison against the train-only models is paired on identical queries.
 
-- [ ] **Scaling curve (val, no new lineage).** `gcl_train.train.pair_fraction` and `pair_seed` (default `1.0`; default-off):
+- [x] **Scaling curve (val, no new lineage).** `gcl_train.train.pair_fraction` and `pair_seed` (default `1.0`; default-off):
   - sample that fraction of distinct source nodes among the positive pairs and keep all of their pairs;
   - the unsampled pairs stay in the gold mask, so they are never scored as false negatives; their endpoints remain ordinary
     candidates;
   - sizes `{25%, 50%, 75%, 100%}` for the **A11 and A12 recipes**, 3 seeds each (24 runs, a few minutes);
   - report val MRR and Hits@10 against pair count (mean ± std) and a straight-line fit on log(pairs), which extrapolates the
     expected gain from +18% data.
-- [ ] **Full-data lineage `ncit_doid_srga_full`:**
+- [x] **Full-data lineage `ncit_doid_srga_full`:**
   - a dataset config like `ncit_doid_srga` with no `val_split` (so all 1,406 train pairs train and the test split is unchanged), under its
     own id so every Sprint 4 and 5 artifact and `LATEST` pointer is untouched (the reasoning of Phases 4.0 and 5.0);
   - copy the three embedding stores' `vectors.npy`, `index.parquet`, `status.parquet`, `manifest.json`, `stats.json` and `LATEST`
     **without the `shards/` directory** (about 24,000 small files; the Sprint 5.0 copy of them took about 30 minutes) and re-verify `node_id` order and `text_sha256`;
   - ingest, then `training_data` (supervised sampler).
-- [ ] **A25 retraining** with the frozen recipes and 3 seeds: A11, A12 (and A3, as the Sprint 5 selection).
+- [x] **A25 retraining** with the frozen recipes and 3 seeds: A11, A12 (and A3, as the Sprint 5 selection).
       If Phase 6.1 selected a fusion, build the same fusion from the full-data members.
       There is no val readout (val is now training data) and no new selection.
-- [ ] Test, once: **A25 for A3, A11, A12 and the selected fusion, if any.**
+- [x] Test, once: **A25 for A3, A11, A12 and the selected fusion, if any.**
   - Compare against the train-only counterparts with per-query paired wins and losses (extend `srga_paired_ranks.py` so a group can name a
     different lineage).
   - A0 test must equal the Sprint 5 value exactly (stores and test pairs unchanged).
-- [ ] If Phase 6.2 passed, apply its val-fitted weights to the full-data first stage as one extra row, flagged as slightly
+- [x] If Phase 6.2 passed, apply its val-fitted weights to the full-data first stage as one extra row, flagged as slightly  *(not applicable: Phase 6.2 stopped at its probe gate, so there are no weights)*
       shifted: the weights were learned on scores from train-only models.
-- [ ] Tests:
+- [x] Tests:
   - `pair_fraction` is deterministic for a seed, moves whole sources, leaves the gold mask intact and defaults to the old behaviour;
   - an `infonce_full` run with `pair_fraction < 1` completes and uses fewer positive pairs;
   - the full-data config loads and has no `val_split`.

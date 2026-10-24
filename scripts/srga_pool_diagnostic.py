@@ -29,7 +29,7 @@ from pathlib import Path
 import numpy as np
 
 from cga.data.aligned import AlignedMatrix, NodeUniverse
-from srga_paired_ranks import _latest, add_fusions, query_ranks
+from srga_paired_ranks import _latest, model_run_dir, add_fusions, query_ranks
 
 
 def main() -> None:
@@ -58,7 +58,7 @@ def main() -> None:
         for seed in args.seeds if "{seed}" in pattern else [None]:
             name = f"{label}:{seed}"
             matrices[name] = AlignedMatrix.load(
-                _latest(root / "models" / "gcl" / args.dataset / pattern.format(seed=seed)) / "node_embeddings"
+                model_run_dir(root, args.dataset, pattern, seed) / "node_embeddings"
             )
             groups[label].append(name)
     add_fusions(matrices, groups, args.fuse)
