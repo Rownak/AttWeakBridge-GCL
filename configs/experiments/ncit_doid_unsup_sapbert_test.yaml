@@ -1,0 +1,35 @@
+# Sprint 9 Phase 9.3 -- TEST readout (once) of the SapBERT ablation matrix on NCIT-DOID (3,280 gold test pairs). Same rows, fixed settings and
+# evaluations as ncit_doid_unsup_test.yaml (Phase 9.2); the text encoder is frozen SapBERT. Trained by
+#   TEXT_EMBEDDER=hf_mean_pool-sapbert PREFIX=sap- bash scripts/run_unsup_matrix.sh ncit_doid_unsup 1 2 3
+#   uv run cga run evaluate --dataset ncit_doid_unsup --experiment ncit_doid_unsup_sapbert_test
+evaluate:
+  methods:
+    - {method_id: sap-u0, label: "SapBERT (frozen)", kind: embedding_store, embedder_id: hf_mean_pool-sapbert, ref: latest}
+    - {method_id: sap-u1-s42, label: "U1 SapBERT + projection, triplet", kind: gcl_run, model_id: sap-u1-s42, ref: latest}
+    - {method_id: sap-u1-s43, label: "U1 SapBERT + projection, triplet", kind: gcl_run, model_id: sap-u1-s43, ref: latest}
+    - {method_id: sap-u1-s44, label: "U1 SapBERT + projection, triplet", kind: gcl_run, model_id: sap-u1-s44, ref: latest}
+    - {method_id: sap-u2-s42, label: "U2 SapBERT + GCN, triplet", kind: gcl_run, model_id: sap-u2-s42, ref: latest}
+    - {method_id: sap-u2-s43, label: "U2 SapBERT + GCN, triplet", kind: gcl_run, model_id: sap-u2-s43, ref: latest}
+    - {method_id: sap-u2-s44, label: "U2 SapBERT + GCN, triplet", kind: gcl_run, model_id: sap-u2-s44, ref: latest}
+    - {method_id: sap-u1-i-s42, label: "U1-I SapBERT + projection, InfoNCE", kind: gcl_run, model_id: sap-u1-i-s42, ref: latest}
+    - {method_id: sap-u1-i-s43, label: "U1-I SapBERT + projection, InfoNCE", kind: gcl_run, model_id: sap-u1-i-s43, ref: latest}
+    - {method_id: sap-u1-i-s44, label: "U1-I SapBERT + projection, InfoNCE", kind: gcl_run, model_id: sap-u1-i-s44, ref: latest}
+    - {method_id: sap-u2-i-s42, label: "U2-I SapBERT + GCN, InfoNCE", kind: gcl_run, model_id: sap-u2-i-s42, ref: latest}
+    - {method_id: sap-u2-i-s43, label: "U2-I SapBERT + GCN, InfoNCE", kind: gcl_run, model_id: sap-u2-i-s43, ref: latest}
+    - {method_id: sap-u2-i-s44, label: "U2-I SapBERT + GCN, InfoNCE", kind: gcl_run, model_id: sap-u2-i-s44, ref: latest}
+    - {method_id: sap-u2-rand-s42, label: "U2-rand SapBERT + GCN, random negatives", kind: gcl_run, model_id: sap-u2-rand-s42, ref: latest}
+    - {method_id: sap-u2-rand-s43, label: "U2-rand SapBERT + GCN, random negatives", kind: gcl_run, model_id: sap-u2-rand-s43, ref: latest}
+    - {method_id: sap-u2-rand-s44, label: "U2-rand SapBERT + GCN, random negatives", kind: gcl_run, model_id: sap-u2-rand-s44, ref: latest}
+    - {method_id: sap-u2-hard-s42, label: "U2-hard SapBERT + GCN, hard negatives", kind: gcl_run, model_id: sap-u2-hard-s42, ref: latest}
+    - {method_id: sap-u2-hard-s43, label: "U2-hard SapBERT + GCN, hard negatives", kind: gcl_run, model_id: sap-u2-hard-s43, ref: latest}
+    - {method_id: sap-u2-hard-s44, label: "U2-hard SapBERT + GCN, hard negatives", kind: gcl_run, model_id: sap-u2-hard-s44, ref: latest}
+    - {method_id: sap-u2-mut-s42, label: "U2-mut SapBERT + GCN, mutual top-k", kind: gcl_run, model_id: sap-u2-mut-s42, ref: latest}
+    - {method_id: sap-u2-mut-s43, label: "U2-mut SapBERT + GCN, mutual top-k", kind: gcl_run, model_id: sap-u2-mut-s43, ref: latest}
+    - {method_id: sap-u2-mut-s44, label: "U2-mut SapBERT + GCN, mutual top-k", kind: gcl_run, model_id: sap-u2-mut-s44, ref: latest}
+  evaluations:
+    - evaluation_id: gold_test
+      kind: gold_alignment
+      params: {ks: [1, 5, 10], split: test, modes: [global], sibling_filter_splits: [test]}
+    - evaluation_id: prf_test
+      kind: gold_alignment_prf
+      params: {split: test, assignment: greedy_one_to_one, top_k: 3, threshold: 0.0, biogitom_filters: false}

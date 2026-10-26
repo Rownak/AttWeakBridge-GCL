@@ -8,6 +8,8 @@ the three seeds of a matrix row become one row reported as mean ± sample std (d
   * a gold table (Hits@1, Hits@10, MRR from ``gold_alignment``; P, R, F1, #Pred, #Correct from ``gold_alignment_prf``).
     A dataset without gold pairs has neither evaluation, and every cell becomes ``—``;
   * a paper table (``PAPER_ROWS`` order: variant, pseudo-pairs, loss, then the same metric columns) for the matrix rows present;
+  * with ``--prefix`` / ``--text-label``, the paper table of a prefixed run (Phase 9.3: ``sap-``, ``SapBERT``), and with
+    ``--compare <run>`` a table of MRR and F1 of the same rows under both encoders;
   * one gold-free table per ``neighborhood`` evaluation (hit@10 and MRR per role and view).
 
 ``summary.csv`` is the long format of every metric (group, evaluation, view, role, metric, k, mean, std, n_seeds).
@@ -170,7 +172,15 @@ def build_markdown(agg: pd.DataFrame, *, ranking_eval: str | None, prf_eval: str
     return "\n".join(parts) + "\n"
 
 
-def build_paper_table(agg: pd.DataFrame, *, ranking_eval: str | None, prf_eval: str | None, view: str) -> str:
+def build_paper_table(
+    agg: pd.DataFrame,
+    *,
+    ranking_eval: str | None,
+    prf_eval: str | None,
+    view: str,
+    prefix: str = "",
+    text_label: str = "BERT",
+) -> str:
     """Render the Sprint 9 paper table (rows in :data:`PAPER_ROWS`; rows without results are omitted).
 
     Args:
@@ -178,6 +188,8 @@ def build_paper_table(agg: pd.DataFrame, *, ranking_eval: str | None, prf_eval: 
         ranking_eval: ``gold_alignment`` evaluation id (default: the first one).
         prf_eval: ``gold_alignment_prf`` evaluation id (default: the first one).
         view: ``gold_alignment`` view for the ranking columns.
+        prefix: Method-group prefix of the run (``sap-`` for Phase 9.3: group ``sap-u2`` is row ``u2``).
+        text_label: Name that replaces ``BERT`` in the row labels (``SapBERT``).
 
     Returns:
         The Markdown table, or an empty string when the run has no gold evaluation.
@@ -189,12 +201,70 @@ def build_paper_table(agg: pd.DataFrame, *, ranking_eval: str | None, prf_eval: 
     present = set(agg.method_group)
     header = ["Variant", "Pseudo-pairs", "Loss"] + [c[0] for c in _RANKING_COLUMNS + _PRF_COLUMNS]
     rows = []
-    for group, variant, pairs, loss in PAPER_ROWS:
+    for row_key, variant, pairs, loss in PAPER_ROWS:
+        group = prefix + row_key
         if group not in present:
             continue
+        variant = variant.replace("BERT", text_label)
         cells = [_cell(agg, group, ranking_eval, view, n, k) if ranking_eval else MISSING for _, n, k in _RANKING_COLUMNS]
         cells += [_cell(agg, group, prf_eval, None, n, k) if prf_eval else MISSING for _, n, k in _PRF_COLUMNS]
         rows.append([variant, pairs, loss] + cells)
+    return _markdown_table(header, rows)
+
+
+def _mean(agg: pd.DataFrame, group: str, evaluation_id: str | None, view: str | None, name: str, k: float | None):
+    """Return the seed-mean of one metric of one group, or None when it is absent."""
+    if evaluation_id is None:
+        return None
+    mask = (agg.method_group == group) & (agg.evaluation_id == evaluation_id) & (agg.metric_name == name)
+    if view is not None:
+        mask &= agg.view_id == view
+    mask &= agg.param_value.isna() if k is None else (agg.param_value == k)
+    hit = agg[mask]
+    return None if hit.empty else float(hit.iloc[0]["mean"])
+
+
+def build_comparison(
+    first: pd.DataFrame,
+    second: pd.DataFrame,
+    *,
+    names: tuple[str, str],
+    prefixes: tuple[str, str],
+    view: str,
+) -> str:
+    """Render MRR and F1 of the same matrix rows under two text encoders, with the difference of the means.
+
+    Args:
+        first: :func:`aggregate` output of the first run (e.g. BERT).
+        second: :func:`aggregate` output of the second run (e.g. SapBERT).
+        names: Column names of the two encoders.
+        prefixes: Method-group prefix of each run.
+        view: ``gold_alignment`` view for MRR.
+
+    Returns:
+        The Markdown table (rows of :data:`PAPER_ROWS` present in both runs); the difference is ``second - first``.
+    """
+    evals = [
+        (_first_evaluation(a, "gold_alignment", None), _first_evaluation(a, "gold_alignment_prf", None))
+        for a in (first, second)
+    ]
+    header = ["Row", "Pseudo-pairs", "Loss"]
+    for metric in ("MRR", "F1"):
+        header += [f"{names[0]} {metric}", f"{names[1]} {metric}", f"Δ {metric}"]
+    rows = []
+    for row_key, variant, pairs, loss in PAPER_ROWS:
+        groups = (prefixes[0] + row_key, prefixes[1] + row_key)
+        if groups[0] not in set(first.method_group) or groups[1] not in set(second.method_group):
+            continue
+        cells = [variant.replace("BERT", "text encoder"), pairs, loss]
+        for metric, name, which in (("MRR", "mrr", 0), ("F1", "f1", 1)):
+            values = [
+                _mean(agg, g, evals[i][which], view if which == 0 else None, name, None)
+                for i, (agg, g) in enumerate(zip((first, second), groups))
+            ]
+            cells += [MISSING if v is None else f"{v:.4f}" for v in values]
+            cells.append(MISSING if None in values else f"{values[1] - values[0]:+.4f}")
+        rows.append(cells)
     return _markdown_table(header, rows)
 
 
@@ -207,14 +277,36 @@ def main() -> None:
     ap.add_argument("--ranking-eval", help="gold_alignment evaluation_id (default: first)")
     ap.add_argument("--prf-eval", help="gold_alignment_prf evaluation_id (default: first)")
     ap.add_argument("--view", default="global", choices=["global", "candidates"])
+    ap.add_argument("--prefix", default="", help="method-group prefix of this run (Phase 9.3: sap-)")
+    ap.add_argument("--text-label", default="BERT", help="encoder name in the paper-table row labels")
+    ap.add_argument("--compare", help="evaluate run id of a second run (same dataset) to compare against")
+    ap.add_argument("--compare-prefix", default="", help="method-group prefix of the --compare run")
+    ap.add_argument("--compare-label", default="BERT", help="encoder name of the --compare run")
     args = ap.parse_args()
 
     run_dir = Path(args.root) / args.dataset / args.run
     agg = aggregate(pd.read_parquet(run_dir / "metrics.parquet"))
     text = build_markdown(agg, ranking_eval=args.ranking_eval, prf_eval=args.prf_eval, view=args.view)
-    paper = build_paper_table(agg, ranking_eval=args.ranking_eval, prf_eval=args.prf_eval, view=args.view)
+    paper = build_paper_table(
+        agg,
+        ranking_eval=args.ranking_eval,
+        prf_eval=args.prf_eval,
+        view=args.view,
+        prefix=args.prefix,
+        text_label=args.text_label,
+    )
     if paper:
         text += "\n## Paper table\n\n" + paper + "\n"
+    if args.compare:
+        other = aggregate(pd.read_parquet(Path(args.root) / args.dataset / args.compare / "metrics.parquet"))
+        comparison = build_comparison(
+            other,
+            agg,
+            names=(args.compare_label, args.text_label),
+            prefixes=(args.compare_prefix, args.prefix),
+            view=args.view,
+        )
+        text += f"\n## {args.compare_label} (run {args.compare}) vs {args.text_label}\n\n" + comparison + "\n"
     (run_dir / "summary.md").write_text(text, encoding="utf-8")
     agg.rename(columns={"mean": "metric_mean", "std": "metric_std"}).to_csv(run_dir / "summary.csv", index=False)
     print(f"wrote {run_dir / 'summary.md'} and {run_dir / 'summary.csv'}")

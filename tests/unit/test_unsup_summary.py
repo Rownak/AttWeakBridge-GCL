@@ -81,3 +81,41 @@ def test_paper_table_lists_present_rows_in_matrix_order_and_is_empty_without_gol
 
     gold_free = unsup_summary.aggregate(pd.DataFrame([_row("u0", "neigh", "neighborhood", "mrr", 0.25)]))
     assert unsup_summary.build_paper_table(gold_free, ranking_eval=None, prf_eval=None, view="global") == ""
+
+
+def _prefixed_frame(prefix: str, offset: float) -> pd.DataFrame:
+    """U0 plus a three-seed U2 under ``prefix``; every metric is shifted by ``offset``."""
+    rows = [
+        _row(f"{prefix}u0", "gold", "gold_alignment", "mrr", 0.2 + offset),
+        _row(f"{prefix}u0", "prf", "gold_alignment_prf", "f1", 0.1 + offset),
+    ]
+    for seed in (42, 43, 44):
+        rows.append(_row(f"{prefix}u2-s{seed}", "gold", "gold_alignment", "mrr", 0.3 + offset + seed / 1e5))
+        rows.append(_row(f"{prefix}u2-s{seed}", "prf", "gold_alignment_prf", "f1", 0.15 + offset))
+    return pd.DataFrame(rows)
+
+
+def test_prefixed_paper_table_maps_groups_to_rows_and_relabels_the_encoder():
+    agg = unsup_summary.aggregate(_prefixed_frame("sap-", 0.1))
+    table = unsup_summary.build_paper_table(
+        agg, ranking_eval=None, prf_eval=None, view="global", prefix="sap-", text_label="SapBERT"
+    )
+    lines = table.splitlines()
+    assert lines[2].startswith("| SapBERT (frozen) | – | – | —")  # no Hits columns in the fixture
+    assert lines[3].startswith("| SapBERT + GCN (text + structure) | top-k | Triplet |")
+    assert len(lines) == 4
+    # Without the prefix nothing matches.
+    assert unsup_summary.build_paper_table(agg, ranking_eval=None, prf_eval=None, view="global").count("\n") == 1
+
+
+def test_comparison_reports_the_difference_of_means_second_minus_first():
+    first = unsup_summary.aggregate(_prefixed_frame("", 0.0))
+    second = unsup_summary.aggregate(_prefixed_frame("sap-", 0.1))
+    table = unsup_summary.build_comparison(
+        first, second, names=("BERT", "SapBERT"), prefixes=("", "sap-"), view="global"
+    )
+    u0 = next(line for line in table.splitlines() if line.startswith("| text encoder (frozen)"))
+    cells = [c.strip() for c in u0.strip("|").split("|")]
+    assert cells[3:6] == ["0.2000", "0.3000", "+0.1000"]  # MRR
+    assert cells[6:9] == ["0.1000", "0.2000", "+0.1000"]  # F1
+    assert len(table.splitlines()) == 4  # header, rule, u0, u2
