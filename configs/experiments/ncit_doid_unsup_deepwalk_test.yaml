@@ -1,0 +1,30 @@
+# Sprint 9 Phase 9.4 -- TEST readout (once) of the DeepWalk-only rows on NCIT-DOID (3,280 gold test pairs). Same two evaluations as
+# ncit_doid_unsup_test.yaml / ncit_doid_unsup_sapbert_test.yaml. Trained by
+#   PREFIX=dw- SAMPLER_PREFIX=sap- bash scripts/run_unsup_matrix.sh ncit_doid_unsup 4
+#   TEXT_EMBEDDER=deepwalk-deepwalk PREFIX=dw- bash scripts/run_unsup_matrix.sh ncit_doid_unsup 5
+#   uv run cga run evaluate --dataset ncit_doid_unsup --experiment ncit_doid_unsup_deepwalk_test
+evaluate:
+  methods:
+    - {method_id: dw-u0, label: "DW0 DeepWalk (frozen)", kind: embedding_store, embedder_id: deepwalk-deepwalk, ref: latest}
+    - {method_id: dw-u1-s42, label: "DW1 DeepWalk + projection, SapBERT pairs, triplet", kind: gcl_run, model_id: dw-u1-s42, ref: latest}
+    - {method_id: dw-u1-s43, label: "DW1 DeepWalk + projection, SapBERT pairs, triplet", kind: gcl_run, model_id: dw-u1-s43, ref: latest}
+    - {method_id: dw-u1-s44, label: "DW1 DeepWalk + projection, SapBERT pairs, triplet", kind: gcl_run, model_id: dw-u1-s44, ref: latest}
+    - {method_id: dw-u1-i-s42, label: "DW1-I DeepWalk + projection, SapBERT pairs, InfoNCE", kind: gcl_run, model_id: dw-u1-i-s42, ref: latest}
+    - {method_id: dw-u1-i-s43, label: "DW1-I DeepWalk + projection, SapBERT pairs, InfoNCE", kind: gcl_run, model_id: dw-u1-i-s43, ref: latest}
+    - {method_id: dw-u1-i-s44, label: "DW1-I DeepWalk + projection, SapBERT pairs, InfoNCE", kind: gcl_run, model_id: dw-u1-i-s44, ref: latest}
+    - {method_id: dw-u2-s42, label: "DW2 GCN of DeepWalk, SapBERT pairs, triplet", kind: gcl_run, model_id: dw-u2-s42, ref: latest}
+    - {method_id: dw-u2-s43, label: "DW2 GCN of DeepWalk, SapBERT pairs, triplet", kind: gcl_run, model_id: dw-u2-s43, ref: latest}
+    - {method_id: dw-u2-s44, label: "DW2 GCN of DeepWalk, SapBERT pairs, triplet", kind: gcl_run, model_id: dw-u2-s44, ref: latest}
+    - {method_id: dw-u2-i-s42, label: "DW2-I GCN of DeepWalk, SapBERT pairs, InfoNCE", kind: gcl_run, model_id: dw-u2-i-s42, ref: latest}
+    - {method_id: dw-u2-i-s43, label: "DW2-I GCN of DeepWalk, SapBERT pairs, InfoNCE", kind: gcl_run, model_id: dw-u2-i-s43, ref: latest}
+    - {method_id: dw-u2-i-s44, label: "DW2-I GCN of DeepWalk, SapBERT pairs, InfoNCE", kind: gcl_run, model_id: dw-u2-i-s44, ref: latest}
+    - {method_id: dw-u2-own-s42, label: "DW2-own GCN of DeepWalk, DeepWalk pairs, triplet", kind: gcl_run, model_id: dw-u2-own-s42, ref: latest}
+    - {method_id: dw-u2-own-s43, label: "DW2-own GCN of DeepWalk, DeepWalk pairs, triplet", kind: gcl_run, model_id: dw-u2-own-s43, ref: latest}
+    - {method_id: dw-u2-own-s44, label: "DW2-own GCN of DeepWalk, DeepWalk pairs, triplet", kind: gcl_run, model_id: dw-u2-own-s44, ref: latest}
+  evaluations:
+    - evaluation_id: gold_test
+      kind: gold_alignment
+      params: {ks: [1, 5, 10], split: test, modes: [global], sibling_filter_splits: [test]}
+    - evaluation_id: prf_test
+      kind: gold_alignment_prf
+      params: {split: test, assignment: greedy_one_to_one, top_k: 3, threshold: 0.0, biogitom_filters: false}

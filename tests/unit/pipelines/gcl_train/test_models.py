@@ -320,3 +320,49 @@ def test_gat_residual_floor_false_exports_h_only():
 def test_gat_adapter_dim_must_be_divisible_by_heads():
     with pytest.raises(ValueError):
         build_residual_adapter_encoder(adapter="gat", adapter_dim=10, text_dim=3, gat_heads=(4, 1))
+
+
+# ---- graph branch (Sprint 9.5) -----------------------------------------------------------
+
+
+def _graph_fixture():
+    text, edge_index, edge_type = _chain_fixture()
+    return text, torch.randn(3, 4), edge_index, edge_type
+
+
+def test_graph_branch_is_off_by_default_and_changes_nothing():
+    text, struct, edge_index, edge_type = _graph_fixture()
+    torch.manual_seed(0)
+    plain = build_residual_adapter_encoder(adapter="gcn", lam=0.25, adapter_dim=5, text_dim=3).eval()
+    torch.manual_seed(0)
+    explicit = build_residual_adapter_encoder(
+        adapter="gcn", lam=0.25, adapter_dim=5, text_dim=3, graph_branch=False, graph_dim=4
+    ).eval()
+    assert torch.equal(plain(text, struct, edge_index, edge_type), explicit(text, struct, edge_index, edge_type))
+
+
+def test_graph_branch_appends_a_scaled_unit_block_and_none_drops_the_text_residual():
+    text, struct, edge_index, edge_type = _graph_fixture()
+    both = build_residual_adapter_encoder(
+        adapter="gcn", lam=0.25, adapter_dim=5, text_dim=3, graph_branch=True, graph_dim=4
+    ).eval()
+    z = both(text, struct, edge_index, edge_type)
+    assert z.shape == (3, 3 + 5 + 5)
+    assert torch.allclose(z[:, :3], text)
+    assert torch.allclose(z[:, 8:].norm(dim=1), torch.full((3,), 0.5), atol=1e-5)
+
+    graph_only = build_residual_adapter_encoder(
+        adapter="none", lam=0.25, adapter_dim=5, text_dim=3, graph_branch=True, graph_dim=4
+    ).eval()
+    assert graph_only(text, struct, edge_index, edge_type).shape == (3, 3 + 5)
+    # The graph branch reads the graph features; the text-only residual does not.
+    assert not torch.allclose(
+        graph_only(text, struct, edge_index, edge_type), graph_only(text, struct * 2 + 1, edge_index, edge_type)
+    )
+
+
+def test_graph_branch_rejects_inconsistent_options():
+    with pytest.raises(ValueError, match="none"):
+        build_residual_adapter_encoder(adapter="none", text_dim=3)
+    with pytest.raises(ValueError, match="residual_floor"):
+        build_residual_adapter_encoder(adapter="gcn", text_dim=3, graph_branch=True, residual_floor=False)

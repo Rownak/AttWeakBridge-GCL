@@ -496,3 +496,59 @@ def test_supervised_protocol_is_unaffected_by_the_guard(tmp_path):
     _setup_training_data_run(config, example_tuples=_ONE_EXAMPLE)
     summary = read_json(_run_gcl_train(config).run_dir / "manifest.json")["summary"]
     assert summary["protocol"] == "supervised"
+
+
+def test_text_features_defaults_to_text_and_graph_feeds_the_deepwalk_store(tmp_path):
+    # Sprint 9.4: `graph` gives the text tower the graph store (4-d here, the text store is 6-d).
+    def _run(name: str, text_features: str | None):
+        config = _unsup_config(tmp_path / name)
+        config["gcl_train"]["model"] = {
+            "encoder": "residual_adapter",
+            "adapter": "mlp",
+            "lambda": 0.25,
+            "adapter_dim": 8,
+            "model_id": f"u1-{name}",
+        }
+        config["gcl_train"]["loss"] = {"name": "triplet", "margin": 1.0, "alpha": 1.0}
+        if text_features:
+            config["gcl_train"]["inputs"]["text_features"] = text_features
+        _setup_training_data_run(config, example_tuples=_ONE_EXAMPLE, summary=_UNSUP_TD_SUMMARY)
+        ctx = _run_gcl_train(config)
+        return AlignedMatrix.load(ctx.run_dir / "node_embeddings"), read_json(ctx.run_dir / "manifest.json")["summary"]
+
+    default, default_summary = _run("default", None)
+    graph, graph_summary = _run("graph", "graph")
+
+    assert default.vectors.shape[1] == 6 + 8 and default_summary["text_features"] == "text"
+    assert graph.vectors.shape[1] == 4 + 8 and graph_summary["text_features"] == "graph"
+    assert np.isfinite(graph.vectors).all()
+
+
+def test_text_features_rejects_an_unknown_source(tmp_path):
+    config = _unsup_config(tmp_path)
+    config["gcl_train"]["inputs"]["text_features"] = "both"
+    _setup_training_data_run(config, example_tuples=_ONE_EXAMPLE, summary=_UNSUP_TD_SUMMARY)
+    with pytest.raises(ConfigError, match="text_features"):
+        _run_gcl_train(config)
+
+
+@pytest.mark.parametrize("adapter,width", [("gcn", 6 + 8 + 8), ("none", 6 + 8)])
+def test_graph_branch_trains_end_to_end_and_is_recorded(tmp_path, adapter, width):
+    config = _unsup_config(tmp_path, epochs=3)
+    config["gcl_train"]["model"] = {
+        "encoder": "residual_adapter",
+        "adapter": adapter,
+        "graph_branch": True,
+        "lambda": 0.25,
+        "adapter_dim": 8,
+        "model_id": f"res-{adapter}-test",
+    }
+    config["gcl_train"]["loss"] = {"name": "infonce", "alpha": 1.0, "temperature": 0.1}
+    _setup_training_data_run(config, example_tuples=_ONE_EXAMPLE, summary=_UNSUP_TD_SUMMARY)
+
+    ctx = _run_gcl_train(config)
+
+    matrix = AlignedMatrix.load(ctx.run_dir / "node_embeddings")
+    assert matrix.vectors.shape == (len(ALL_IDS), width) and np.isfinite(matrix.vectors).all()
+    summary = read_json(ctx.run_dir / "manifest.json")["summary"]
+    assert summary["graph_branch"] is True and summary["n_trainable_params"] > 0

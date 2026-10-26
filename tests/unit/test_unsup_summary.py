@@ -119,3 +119,17 @@ def test_comparison_reports_the_difference_of_means_second_minus_first():
     assert cells[3:6] == ["0.2000", "0.3000", "+0.1000"]  # MRR
     assert cells[6:9] == ["0.1000", "0.2000", "+0.1000"]  # F1
     assert len(table.splitlines()) == 4  # header, rule, u0, u2
+
+
+def test_deepwalk_row_set_labels_rows_and_names_the_pseudo_pair_source():
+    frame = _prefixed_frame("dw-", 0.0)
+    own = [_row(f"dw-u2-own-s{s}", "gold", "gold_alignment", "mrr", 0.001) for s in (42, 43, 44)]
+    agg = unsup_summary.aggregate(pd.concat([frame, pd.DataFrame(own)]))
+    table = unsup_summary.build_paper_table(
+        agg, ranking_eval=None, prf_eval=None, view="global", prefix="dw-", rows=unsup_summary.ROW_SETS["deepwalk"]
+    )
+    lines = table.splitlines()
+    assert lines[2].startswith("| DeepWalk (frozen) | – | – |")
+    assert lines[3].startswith("| GCN of DeepWalk | SapBERT top-k | Triplet |")
+    assert lines[4].startswith("| GCN of DeepWalk | DeepWalk top-k | Triplet |")
+    assert len(lines) == 5

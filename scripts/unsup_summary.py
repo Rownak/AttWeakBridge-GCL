@@ -51,6 +51,24 @@ PAPER_ROWS = [
     ("u2-hard", "BERT + GCN", "hard neg.", "Triplet"),
     ("u2-mut", "BERT + GCN", "mutual top-k", "Triplet"),
 ]
+# Phase 9.4 rows (DeepWalk as the only encoder input). Pseudo-pairs of u1 .. u2-i come from SapBERT cosine, u2-own from DeepWalk's.
+DEEPWALK_ROWS = [
+    ("u0", "DeepWalk (frozen)", "–", "–"),
+    ("u1", "DeepWalk + projection", "SapBERT top-k", "Triplet"),
+    ("u1-i", "DeepWalk + projection", "SapBERT top-k", "InfoNCE"),
+    ("u2", "GCN of DeepWalk", "SapBERT top-k", "Triplet"),
+    ("u2-i", "GCN of DeepWalk", "SapBERT top-k", "InfoNCE"),
+    ("u2-own", "GCN of DeepWalk", "DeepWalk top-k", "Triplet"),
+]
+# Phase 9.5 rows (frozen SapBERT block plus GCN residual branches; SapBERT top-k pairs, InfoNCE for the trained rows).
+RESIDUAL_ROWS = [
+    ("r0", "SapBERT (frozen)", "–", "–"),
+    ("a1", "SapBERT + training-free neighbour residual (A1)", "–", "–"),
+    ("r1", "SapBERT + GCN(SapBERT)", "SapBERT top-k", "InfoNCE"),
+    ("r2", "SapBERT + GCN(DeepWalk)", "SapBERT top-k", "InfoNCE"),
+    ("r3", "SapBERT + GCN(SapBERT) + GCN(DeepWalk)", "SapBERT top-k", "InfoNCE"),
+]
+ROW_SETS = {"matrix": PAPER_ROWS, "deepwalk": DEEPWALK_ROWS, "residual": RESIDUAL_ROWS}
 _COUNT_METRICS = {"n_predicted", "n_correct", "n_gold", "n_unique_sources", "n_unique_targets"}
 
 
@@ -180,8 +198,9 @@ def build_paper_table(
     view: str,
     prefix: str = "",
     text_label: str = "BERT",
+    rows: list[tuple[str, str, str, str]] | None = None,
 ) -> str:
-    """Render the Sprint 9 paper table (rows in :data:`PAPER_ROWS`; rows without results are omitted).
+    """Render the Sprint 9 paper table (rows in :data:`PAPER_ROWS`, or ``rows``; rows without results are omitted).
 
     Args:
         agg: Output of :func:`aggregate`.
@@ -190,6 +209,7 @@ def build_paper_table(
         view: ``gold_alignment`` view for the ranking columns.
         prefix: Method-group prefix of the run (``sap-`` for Phase 9.3: group ``sap-u2`` is row ``u2``).
         text_label: Name that replaces ``BERT`` in the row labels (``SapBERT``).
+        rows: Row set (default :data:`PAPER_ROWS`; Phase 9.4 passes :data:`DEEPWALK_ROWS`).
 
     Returns:
         The Markdown table, or an empty string when the run has no gold evaluation.
@@ -200,16 +220,16 @@ def build_paper_table(
         return ""
     present = set(agg.method_group)
     header = ["Variant", "Pseudo-pairs", "Loss"] + [c[0] for c in _RANKING_COLUMNS + _PRF_COLUMNS]
-    rows = []
-    for row_key, variant, pairs, loss in PAPER_ROWS:
+    body = []
+    for row_key, variant, pairs, loss in rows or PAPER_ROWS:
         group = prefix + row_key
         if group not in present:
             continue
         variant = variant.replace("BERT", text_label)
         cells = [_cell(agg, group, ranking_eval, view, n, k) if ranking_eval else MISSING for _, n, k in _RANKING_COLUMNS]
         cells += [_cell(agg, group, prf_eval, None, n, k) if prf_eval else MISSING for _, n, k in _PRF_COLUMNS]
-        rows.append([variant, pairs, loss] + cells)
-    return _markdown_table(header, rows)
+        body.append([variant, pairs, loss] + cells)
+    return _markdown_table(header, body)
 
 
 def _mean(agg: pd.DataFrame, group: str, evaluation_id: str | None, view: str | None, name: str, k: float | None):
@@ -231,6 +251,7 @@ def build_comparison(
     names: tuple[str, str],
     prefixes: tuple[str, str],
     view: str,
+    rows: list[tuple[str, str, str, str]] | None = None,
 ) -> str:
     """Render MRR and F1 of the same matrix rows under two text encoders, with the difference of the means.
 
@@ -240,6 +261,7 @@ def build_comparison(
         names: Column names of the two encoders.
         prefixes: Method-group prefix of each run.
         view: ``gold_alignment`` view for MRR.
+        rows: Row set (default :data:`PAPER_ROWS`).
 
     Returns:
         The Markdown table (rows of :data:`PAPER_ROWS` present in both runs); the difference is ``second - first``.
@@ -251,8 +273,8 @@ def build_comparison(
     header = ["Row", "Pseudo-pairs", "Loss"]
     for metric in ("MRR", "F1"):
         header += [f"{names[0]} {metric}", f"{names[1]} {metric}", f"Δ {metric}"]
-    rows = []
-    for row_key, variant, pairs, loss in PAPER_ROWS:
+    body = []
+    for row_key, variant, pairs, loss in rows or PAPER_ROWS:
         groups = (prefixes[0] + row_key, prefixes[1] + row_key)
         if groups[0] not in set(first.method_group) or groups[1] not in set(second.method_group):
             continue
@@ -264,8 +286,8 @@ def build_comparison(
             ]
             cells += [MISSING if v is None else f"{v:.4f}" for v in values]
             cells.append(MISSING if None in values else f"{values[1] - values[0]:+.4f}")
-        rows.append(cells)
-    return _markdown_table(header, rows)
+        body.append(cells)
+    return _markdown_table(header, body)
 
 
 def main() -> None:
@@ -278,6 +300,7 @@ def main() -> None:
     ap.add_argument("--prf-eval", help="gold_alignment_prf evaluation_id (default: first)")
     ap.add_argument("--view", default="global", choices=["global", "candidates"])
     ap.add_argument("--prefix", default="", help="method-group prefix of this run (Phase 9.3: sap-)")
+    ap.add_argument("--rows", default="matrix", choices=list(ROW_SETS), help="paper-table row set (Phase 9.4: deepwalk)")
     ap.add_argument("--text-label", default="BERT", help="encoder name in the paper-table row labels")
     ap.add_argument("--compare", help="evaluate run id of a second run (same dataset) to compare against")
     ap.add_argument("--compare-prefix", default="", help="method-group prefix of the --compare run")
@@ -294,6 +317,7 @@ def main() -> None:
         view=args.view,
         prefix=args.prefix,
         text_label=args.text_label,
+        rows=ROW_SETS[args.rows],
     )
     if paper:
         text += "\n## Paper table\n\n" + paper + "\n"
@@ -305,6 +329,7 @@ def main() -> None:
             names=(args.compare_label, args.text_label),
             prefixes=(args.compare_prefix, args.prefix),
             view=args.view,
+            rows=ROW_SETS[args.rows],
         )
         text += f"\n## {args.compare_label} (run {args.compare}) vs {args.text_label}\n\n" + comparison + "\n"
     (run_dir / "summary.md").write_text(text, encoding="utf-8")

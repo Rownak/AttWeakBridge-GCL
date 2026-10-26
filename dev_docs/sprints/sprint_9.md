@@ -41,6 +41,8 @@ Branch: `v1.3_ncit_doid_biogitom_bench` (already contains the Sprint 8 `gold_ali
 |---|---|---|
 | 9.1 | Tests green; pseudo-pairs are byte-identical with and without `alignments.parquet`; U0 reproduces the frozen-BERT test numbers of a plain `embedding_store` evaluation; ATT&CK–CWE runs end-to-end | Fix before 9.2 |
 | 9.3 | U0-SapBERT reproduces the frozen-SapBERT `embedding_store` evaluation and the Sprint 5/6.3 A0 test numbers; the SapBERT store passes the 9.1 copy checks | Fix before reading the matrix |
+| 9.4 | DW0 equals DeepWalk evaluated alone and is near chance; the `text_features` option leaves earlier runs unchanged | Fix before reading the matrix |
+| 9.5 | `graph_branch` off reproduces earlier residual runs; R0 equals the 9.3 U0 and the A1 reference numbers | Fix before reading the matrix |
 
 ---
 
@@ -114,6 +116,54 @@ Shared settings: text = frozen `bert_base`; structure = DeepWalk; sampler `rank_
 **Caveat to state with the table.** SapBERT was pretrained on UMLS synonym pairs. NCIT and DOID concepts that share a UMLS concept (CUI) were pulled together during that pretraining, so frozen SapBERT carries cross-vocabulary alignment knowledge that `bert_base` does not. It is not gold supervision from this dataset and no gold pair is used by our training, but the table must not claim that the SapBERT rows use no external alignment information.
 
 **Acceptance:** gate 9.3; all eight rows with 3 seeds; the table and the comparison filled; test-read disclosure. **Decision:** report only.
+
+---
+
+## Phase 9.4: DeepWalk-only rows
+
+**Capability:** the Phase 9.2/9.3 table with DeepWalk as the node encoder input, to measure how much alignment signal structure alone carries and what the GCN adds to it. Same protocol, evaluation and fixed settings; only the encoder input changes.
+
+**Design decision.** NCIT and DOID share no edges, so DeepWalk coordinates are not comparable across graphs (Sprint 4: frozen DeepWalk cross-graph MRR 0.0007). Pseudo-pairs built from DeepWalk similarity would therefore be random. The main rows take their pseudo-pairs from **SapBERT** cosine (the 9.3 `sap-rank_topk-k5` samplers, no gold) and give the encoder **only DeepWalk** as input. These rows are structure-only at inference, but SapBERT (UMLS-pretrained) shapes their training, which must be stated with the table. One control uses DeepWalk's own pairs.
+
+| ID | Encoder (input: DeepWalk 128-d) | Pseudo-pairs | Loss | Question |
+|---|---|---|---|---|
+| DW0 | frozen DeepWalk (`embedding_store`) | – | – | structure-only floor (expected near chance) |
+| DW1 | DeepWalk + projection (`residual_adapter`, `adapter: mlp`, λ 0.25, `alpha: 1.0`) | SapBERT top-k | Triplet | can a projection align DeepWalk using text-derived pairs? |
+| DW1-I | as DW1 | SapBERT top-k | InfoNCE | triplet vs InfoNCE |
+| DW2 | GCN of DeepWalk (`encoder: gcn`, `alpha: 0.5`; both towers fed DeepWalk) | SapBERT top-k | Triplet | does message passing add to DW1? |
+| DW2-I | as DW2 | SapBERT top-k | InfoNCE | triplet vs InfoNCE with graph |
+| DW2-own | as DW2 | DeepWalk's own top-k | Triplet | control: no text signal at all (expected near chance) |
+
+- [x] **Option `gcl_train.inputs.text_features: text | graph`** (default `text`, so earlier runs are unchanged): `graph` feeds the graph (DeepWalk) store to the text tower. Unit test: default unchanged, `graph` trains end to end. The `unsupervised` guard is unaffected.
+- [x] **Train** DW1, DW1-I, DW2, DW2-I with the `sap-` pseudo-pairs, and DW2-own with `training_data.inputs.text_embeddings.embedder_id=deepwalk-deepwalk` (sampler id `dw-rank_topk-k5`), 3 seeds each (15 runs). Fixed 9.2 settings, nothing re-tuned. Model ids `dw-u1`, `dw-u1-i`, `dw-u2`, `dw-u2-i`, `dw-u2-own` (+ `-s<seed>`); `run_unsup_matrix.sh` gains an extra-arguments hook so the 9.2/9.3 commands stay unchanged.
+- [x] **Evaluate once** with `configs/experiments/ncit_doid_unsup_deepwalk_test.yaml` (same two evaluations as 9.2/9.3; methods `dw-u0` = `deepwalk-deepwalk` and the 15 models).
+- [x] **Table** with `unsup_summary.py --prefix dw-`: the same columns as the paper table (Hits@1, Hits@10, MRR, P, R, F1, #Pred, #Correct), plus `--compare` against the SapBERT run.
+- [x] **Check:** DW0 equals DeepWalk evaluated alone as an `embedding_store` and is near chance (MRR of the order 1e-3); DW2-own is also near chance.
+- [x] **Log** `dev_docs/execution_logs/sprint_9_4.md`: table, run ids, test-read disclosure, and the caveat that DW1/DW2 pairs come from SapBERT.
+
+**Acceptance:** gate 9.4; all rows with 3 seeds; table filled. **Decision:** report only.
+
+---
+
+## Phase 9.5: SapBERT residual with SapBERT / DeepWalk GCN branches
+
+**Capability:** test whether a GCN over SapBERT and/or over DeepWalk, added as a residual on frozen SapBERT, beats frozen SapBERT under fixed pseudo-pairs (SapBERT top-k) and a fixed loss (InfoNCE). Phase 9.4 showed DeepWalk alone is weak (best DW2-I MRR 0.1552) and probably distils SapBERT's neighbours rather than adding information; this phase asks whether it adds anything on top of SapBERT.
+
+| ID | Encoder `z = SapBERT + residual` | Residual from |
+|---|---|---|
+| R0 | frozen SapBERT (U0) and the training-free neighbour residual (A1) | – (references) |
+| R1 | SapBERT + GCN(SapBERT) | text GCN branch (existing `residual_adapter`, `adapter: gcn`, residual floor) |
+| R2 | SapBERT + GCN(DeepWalk) | structure GCN branch |
+| R3 | SapBERT + GCN(SapBERT) + GCN(DeepWalk) | both |
+
+- [x] **Score-fusion check first (no training).** On the 9.3 and 9.4 embeddings, rank by `cos_SapBERT + w * cos_DW2-I` for w in {0.1, 0.25, 0.5, 1} (fixed grid, reported in full, no test-based selection of w). If no w beats frozen SapBERT on MRR and F1, state that DW2-I carries no complementary signal, still run R1, and run R2/R3 only as reported controls.
+- [x] **Option `gcl_train.model.graph_branch: true`** (default off): a second residual, a GCN over the graph (DeepWalk) store, added with its own λ. Unit tests: default unchanged; R2 and R3 train end to end; the `unsupervised` guard is unaffected.
+- [x] **Train** R1, R2, R3, 3 seeds each (9 runs): `sap-rank_topk-k5` pairs (the seed's own run), InfoNCE, 9.2 settings, λ 0.25 per branch, nothing re-tuned. Model ids `res-r1`, `res-r2`, `res-r3` (+ `-s<seed>`).
+- [x] **Evaluate once** (`ncit_doid_unsup_residual_test.yaml`: methods `sap-u0`, A1 reference, and the 9 models; same two evaluations as 9.2-9.4) and **table** from `unsup_summary.py` with a `--compare` against the 9.3 SapBERT run.
+- [x] **Check:** R1 beats or equals frozen SapBERT only if MRR and F1 means exceed it by more than the seed std; R3 versus R1 is the test of whether DeepWalk adds anything. Report the result either way.
+- [x] **Log** `dev_docs/execution_logs/sprint_9_5.md`: fusion table, row table, run ids, test-read disclosure, and the caveat that the pairs come from SapBERT (UMLS-pretrained), so the objective rewards reproducing SapBERT geometry.
+
+**Acceptance:** gate 9.5; fusion check and all rows with 3 seeds; table filled. **Decision:** report only.
 
 ---
 

@@ -151,7 +151,7 @@ def build_dual_encoder(
     )
 
 
-_ADAPTERS = ("neighbor_mean", "mlp", "relational", "gcn", "gat")
+_ADAPTERS = ("neighbor_mean", "mlp", "relational", "gcn", "gat", "none")
 _PARENT_EDGE_TYPE = 1  # reversed copy: message flows parent -> child, so the target's neighbour is a parent
 _CHILD_EDGE_TYPE = 0  # stored direction child -> parent: the target (parent) receives its children
 
@@ -253,8 +253,13 @@ class ResidualAdapterEncoder(nn.Module):
     (``3d + 1``, ``m_n`` = mean over all neighbours) and one weight ``W_nbr``. The last ``MLP_2``
     layer starts at std 1e-3 like the Phase 5.2 adapter.
 
+    Graph branch (Sprint 9.5, ``graph_branch=True``): a second residual block from a GCN over the *graph* (DeepWalk)
+    features ``s``, built like the ``gcn`` adapter (``fc(s)`` and a 2-layer GCN over ``s``, fused by a last layer at
+    std 1e-3) and appended as ``sqrt(lambda) * normalize(h_graph)``, so ``z = [x̂ ; text residual ; graph residual]``.
+    ``adapter: none`` drops the text residual (``z = [x̂ ; graph residual]``) and needs the branch.
+
     Args:
-        adapter: ``neighbor_mean``, ``mlp`` or ``relational``.
+        adapter: ``neighbor_mean``, ``mlp``, ``relational``, ``gcn``, ``gat`` or ``none``.
         lam: Fixed global residual weight ``lambda`` (``>= 0``).
         adapter_dim: Hidden/output width ``a`` of the trainable adapters (unused by ``neighbor_mean``).
         directional: When true, ``neighbor_mean`` uses ``h = [mean parents ; mean children]`` and
@@ -264,9 +269,12 @@ class ResidualAdapterEncoder(nn.Module):
         residual_floor: When false, export ``z = h`` with no SapBERT block (``gcn``/``gat`` controls A12/A15).
         gat_heads: ``(first_layer_heads, second_layer_heads)`` for the ``gat`` adapter; ``adapter_dim`` must be
             divisible by ``gat_heads[0]``.
+        graph_branch: Add the DeepWalk GCN residual block (default off: earlier runs are unchanged).
+        graph_dim: Width of the graph features ``s`` (sizes the branch).
 
     Raises:
-        ValueError: On an unknown adapter, a not-yet-implemented adapter, or negative ``lam``.
+        ValueError: On an unknown adapter, negative ``lam``, ``adapter: none`` without the branch, or the branch
+            with ``residual_floor=False``.
     """
 
     def __init__(
@@ -280,8 +288,14 @@ class ResidualAdapterEncoder(nn.Module):
         adapter_dropout: float = 0.2,
         residual_floor: bool = True,
         gat_heads: tuple[int, int] = (8, 1),
+        graph_branch: bool = False,
+        graph_dim: int = 128,
     ) -> None:
         super().__init__()
+        if adapter == "none" and not graph_branch:
+            raise ValueError("adapter 'none' needs graph_branch=True")
+        if graph_branch and not residual_floor:
+            raise ValueError("graph_branch needs residual_floor=True")
         if adapter not in _ADAPTERS:
             raise ValueError(f"Unknown adapter '{adapter}'; expected one of {list(_ADAPTERS)}")
         if lam < 0:
@@ -291,6 +305,14 @@ class ResidualAdapterEncoder(nn.Module):
         self.adapter_dim = adapter_dim
         self.directional = directional
         self.residual_floor = residual_floor
+        self.graph_branch = graph_branch
+        if graph_branch:
+            self.g_fc = nn.Linear(graph_dim, adapter_dim)
+            self.g_gcn = GCN(in_channels=graph_dim, out_channels=adapter_dim, hid_dim=adapter_dim)
+            self.g_dropout = nn.Dropout(adapter_dropout)
+            self.g_fuse = nn.Linear(2 * adapter_dim, adapter_dim)
+            nn.init.normal_(self.g_fuse.weight, std=1e-3)
+            nn.init.zeros_(self.g_fuse.bias)
         if adapter in ("gcn", "gat"):
             if adapter == "gat" and adapter_dim % gat_heads[0] != 0:
                 raise ValueError(f"adapter_dim {adapter_dim} must be divisible by gat_heads[0]={gat_heads[0]}")
@@ -366,8 +388,8 @@ class ResidualAdapterEncoder(nn.Module):
 
         Args:
             text_emb: ``(n, 768)`` text embeddings (used frozen).
-            struct_emb: Unused; kept so the signature matches :class:`DualEncoder`
-                (DeepWalk is not cross-graph comparable and is not an SRGA input).
+            struct_emb: Graph (DeepWalk) features; used only by the 9.5 ``graph_branch`` (DeepWalk is not
+                cross-graph comparable, so it is not an SRGA text input).
             edge_index: ``(2, e)`` symmetrized message edges.
             edge_type: ``(e,)`` per-edge type (0 = stored child->parent direction,
                 1 = reversed). Required when ``directional``.
@@ -380,7 +402,20 @@ class ResidualAdapterEncoder(nn.Module):
         Raises:
             ValueError: If ``directional`` and ``edge_type`` is ``None`` (``neighbor_mean``, ``relational``).
         """
+        z = self._text_forward(text_emb, edge_index, edge_type)
+        if not self.graph_branch:
+            return z
+        s = struct_emb.detach()
+        h_g = self.g_fuse(self.g_dropout(torch.cat([self.g_fc(s), self.g_gcn(s, edge_index)], dim=1)))
+        return torch.cat([z, (self.lam**0.5) * _unit(h_g)], dim=1)
+
+    def _text_forward(
+        self, text_emb: torch.Tensor, edge_index: torch.Tensor, edge_type: torch.Tensor | None
+    ) -> torch.Tensor:
+        """``z`` without the graph branch (the pre-9.5 forward, unchanged)."""
         x_hat = _unit(text_emb.detach())
+        if self.adapter == "none":
+            return x_hat
         if self.adapter in ("gcn", "gat"):
             tower = self.gcn if self.adapter == "gcn" else self.gat
             h = self.fc_fuse(self.fuse_dropout(torch.cat([self.fc_text(x_hat), tower(x_hat, edge_index)], dim=1)))
@@ -412,6 +447,8 @@ def build_residual_adapter_encoder(
     adapter_dropout: float = 0.2,
     residual_floor: bool = True,
     gat_heads: tuple[int, int] = (8, 1),
+    graph_branch: bool = False,
+    graph_dim: int = 128,
 ) -> ResidualAdapterEncoder:
     """Construct a :class:`ResidualAdapterEncoder` (see its docstring for the arguments)."""
     return ResidualAdapterEncoder(
@@ -423,4 +460,6 @@ def build_residual_adapter_encoder(
         adapter_dropout=adapter_dropout,
         residual_floor=residual_floor,
         gat_heads=gat_heads,
+        graph_branch=graph_branch,
+        graph_dim=graph_dim,
     )

@@ -1,0 +1,23 @@
+# Sprint 9 Phase 9.5 -- TEST readout (once) of the SapBERT-residual rows on NCIT-DOID (3,280 gold test pairs). Trained by
+#   PREFIX=res- SAMPLER_PREFIX=sap- bash scripts/run_unsup_matrix.sh ncit_doid_unsup 6
+#   uv run cga run evaluate --dataset ncit_doid_unsup --experiment ncit_doid_unsup_residual_test
+evaluate:
+  methods:
+    - {method_id: res-r0, label: "R0 SapBERT (frozen)", kind: embedding_store, embedder_id: hf_mean_pool-sapbert, ref: latest}
+    - {method_id: res-a1, label: "R0 SapBERT + training-free neighbour residual (A1)", kind: gcl_run, model_id: res-a1, ref: latest}
+    - {method_id: res-r1-s42, label: "R1 SapBERT + GCN(SapBERT)", kind: gcl_run, model_id: res-r1-s42, ref: latest}
+    - {method_id: res-r1-s43, label: "R1 SapBERT + GCN(SapBERT)", kind: gcl_run, model_id: res-r1-s43, ref: latest}
+    - {method_id: res-r1-s44, label: "R1 SapBERT + GCN(SapBERT)", kind: gcl_run, model_id: res-r1-s44, ref: latest}
+    - {method_id: res-r2-s42, label: "R2 SapBERT + GCN(DeepWalk)", kind: gcl_run, model_id: res-r2-s42, ref: latest}
+    - {method_id: res-r2-s43, label: "R2 SapBERT + GCN(DeepWalk)", kind: gcl_run, model_id: res-r2-s43, ref: latest}
+    - {method_id: res-r2-s44, label: "R2 SapBERT + GCN(DeepWalk)", kind: gcl_run, model_id: res-r2-s44, ref: latest}
+    - {method_id: res-r3-s42, label: "R3 SapBERT + GCN(SapBERT) + GCN(DeepWalk)", kind: gcl_run, model_id: res-r3-s42, ref: latest}
+    - {method_id: res-r3-s43, label: "R3 SapBERT + GCN(SapBERT) + GCN(DeepWalk)", kind: gcl_run, model_id: res-r3-s43, ref: latest}
+    - {method_id: res-r3-s44, label: "R3 SapBERT + GCN(SapBERT) + GCN(DeepWalk)", kind: gcl_run, model_id: res-r3-s44, ref: latest}
+  evaluations:
+    - evaluation_id: gold_test
+      kind: gold_alignment
+      params: {ks: [1, 5, 10], split: test, modes: [global], sibling_filter_splits: [test]}
+    - evaluation_id: prf_test
+      kind: gold_alignment_prf
+      params: {split: test, assignment: greedy_one_to_one, top_k: 3, threshold: 0.0, biogitom_filters: false}

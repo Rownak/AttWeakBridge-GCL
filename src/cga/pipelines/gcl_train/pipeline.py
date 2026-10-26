@@ -78,6 +78,7 @@ class _GclTrainState:
         self.training_data_summary: dict[str, Any] = {}
         self.text_embedding_run_id: str = ""
         self.graph_embedding_run_id: str = ""
+        self.text_features_source: str = "text"
 
 
 def check_protocol(config: dict[str, Any]) -> None:
@@ -160,8 +161,17 @@ class LoadStep:
         universe = NodeUniverse.from_parquet(training_data_dir / "universe.parquet")
         state.universe = universe
 
-        text_matrix = AlignedMatrix.load(text_dir).select(universe.node_ids)
         graph_matrix = AlignedMatrix.load(graph_dir).select(universe.node_ids)
+        text_features_source = (cfg.get("inputs") or {}).get("text_features", "text")
+        if text_features_source == "graph":
+            # Structure-only ablation (Sprint 9.4): the text tower is fed the graph (DeepWalk) store, so the
+            # encoder never sees text. Pseudo-pairs still come from whatever the training_data run used.
+            text_matrix = graph_matrix
+        elif text_features_source == "text":
+            text_matrix = AlignedMatrix.load(text_dir).select(universe.node_ids)
+        else:
+            raise ConfigError(f"Unknown gcl_train.inputs.text_features '{text_features_source}'; expected 'text' or 'graph'")
+        state.text_features_source = text_features_source
 
         device = ctx.device
         state.text_features = torch.tensor(text_matrix.vectors, dtype=torch.float32, device=device)
@@ -326,6 +336,8 @@ class TrainStep:
                 adapter_dropout=model_cfg.get("adapter_dropout", 0.2),
                 residual_floor=model_cfg.get("residual_floor", True),
                 gat_heads=tuple(model_cfg.get("gat_heads", [8, 1])),
+                graph_branch=bool(model_cfg.get("graph_branch", False)),
+                graph_dim=state.struct_features.shape[1],
             ).to(ctx.device)
         else:
             model = build_dual_encoder(
@@ -464,6 +476,8 @@ class ManifestStep:
             "n_examples_train": state.n_examples_train,
             "n_trainable_params": state.n_trainable_params,
             "n_positive_pairs": state.n_positive_pairs,
+            "text_features": state.text_features_source,
+            "graph_branch": bool(ctx.config["gcl_train"]["model"].get("graph_branch", False)),
             "protocol": get_protocol(ctx.config),
             "held_out_policy": state.training_data_summary.get("held_out_policy"),
             "n_pseudo_pairs": state.training_data_summary.get("n_pseudo_pairs"),
