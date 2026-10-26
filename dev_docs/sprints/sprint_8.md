@@ -46,20 +46,20 @@ reads the aligned matrix.
 6. @1 variant: top-1 target per source, no assignment (BioGITOM's `evaluate_topk`).
 ```
 
-- [ ] `evaluate/evaluators/gold_alignment_prf.py` (new, registered in `evaluators/__init__.py`). Options: `split` (`val`|`test`), `top_k` (3),
+- [x] `evaluate/evaluators/gold_alignment_prf.py` (new, registered in `evaluators/__init__.py`). Options: `split` (`val`|`test`), `top_k` (3),
       `threshold` (0.0), `biogitom_filters` (bool), `assignment` (`greedy_one_to_one`|`top1`).
   - Ties break by node id. Gold pairs with an endpoint missing from a method count as unpredicted, so recall cannot be inflated.
   - For `val`, "train" in filter (a) means the train pairs left after the val carve.
   - Emits `precision`, `recall`, `f1`, `n_predicted`, `n_correct`, `n_gold`, `n_unique_sources`, `n_unique_targets` (the recall ceiling of
     a one-to-one assignment when a source has several gold targets).
-- [ ] Tests (`tests/unit/pipelines/evaluate/test_gold_alignment_prf.py`):
+- [x] Tests (`tests/unit/pipelines/evaluate/test_gold_alignment_prf.py`):
   - a hand-built 4×4 score matrix with known P/R/F1 for `greedy_one_to_one`, `top1`, each filter and a threshold;
   - a source with two gold targets caps recall below 1 under one-to-one but not under `top1`;
   - missing endpoints count as unpredicted gold; ties break by node id;
   - a `fusion` method gives the same numbers as its explicit weighted-mean score matrix.
-- [ ] Smoke run on **val with A0 only** (`configs/experiments/ncit_doid_srga_prf_smoke.yaml`): counts are consistent (`n_gold` = 211) and
+- [x] Smoke run on **val with A0 only** (`configs/experiments/ncit_doid_srga_prf_smoke.yaml`): counts are consistent (`n_gold` = 211) and
       `top1` F1 is close to the A0 Hits@1 from Sprint 5 (0.2938 when no filter is applied).
-- [ ] README: add the evaluator and its command to the SRGA section.
+- [x] README: add the evaluator and its command to the SRGA section.
 
 **Training objective / negatives:** none (no training).
 **Acceptance:** tests green; the smoke run reproduces the A0 sanity checks above.
@@ -71,14 +71,14 @@ reads the aligned matrix.
 
 **Capability:** run the 8.1 evaluator over the existing models and produce the comparison. No model is trained and no earlier number changes.
 
-- [ ] Val (`configs/experiments/ncit_doid_srga_prf.yaml`): A0, A1, A3, A4, A11, A12, A14, A15, A17–A20; filters on and off,
+- [x] Val (`configs/experiments/ncit_doid_srga_prf.yaml`): A0, A1, A3, A4, A11, A12, A14, A15, A17–A20; filters on and off,
       `greedy_one_to_one` and `top1`.
-- [ ] Threshold sweep, val only (`scripts/srga_prf_threshold.py`): score threshold over a fixed grid for A19 and A12, P/R curve and best-F1
+- [x] Threshold sweep, val only (`scripts/srga_prf_threshold.py`): score threshold over a fixed grid for A19 and A12, P/R curve and best-F1
       threshold. Threshold 0.0 stays the comparable headline; the swept value is a separate, labelled row, applied once to test.
-- [ ] Test, once (`configs/experiments/ncit_doid_srga_prf_test.yaml`), filters on and off:
+- [x] Test, once (`configs/experiments/ncit_doid_srga_prf_test.yaml`), filters on and off:
   - train-only lineage `ncit_doid_srga`: A0, A1, A3, A4, A11, A12, A14, A15, A17, A18, A19 (trained models: mean ± std over seeds);
   - full-data lineage `ncit_doid_srga_full` (the same 1,406 training pairs as BioGITOM): A25 for A3, A11, A12 and A19.
-- [ ] Execution log `sprint_8_2.md` with the "comparable to BioGITOM" rows: full-data lineage, filters on, threshold 0.0,
+- [x] Execution log `sprint_8_2.md` with the "comparable to BioGITOM" rows: full-data lineage, filters on, threshold 0.0,
       `greedy_one_to_one`, next to BioGITOM's logged P 0.924 / R 0.911 / F1 0.917 (2,989 / 3,236 / 3,280), naming the log cited. The unfiltered rows
       sit beside them so the reader sees how much of any gap comes from the train-label filter.
 

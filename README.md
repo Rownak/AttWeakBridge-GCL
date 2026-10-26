@@ -264,6 +264,15 @@ uv run python scripts/srga_fusion_bootstrap.py --dataset ncit_doid_srga --split 
 uv run python scripts/srga_scaling_curve.py --dataset ncit_doid_srga   # val MRR vs number of training pairs (pair_fraction runs)
 uv run cga run evaluate --dataset ncit_doid_srga_full --experiment ncit_doid_srga_full_test   # full-data models on test
 # --group LABEL=ncit_doid_srga_full::model_id{seed} in the srga_*.py scripts compares models of another lineage on the same queries.
+
+# Sprint 8: BioGITOM-comparable P/R/F1. `gold_alignment_prf` (params: split, top_k=3, threshold=0.0, biogitom_filters=false,
+# assignment=greedy_one_to_one|top1) scores the predicted pair set of any method kind against the split's gold pairs; no training.
+uv run cga run evaluate --dataset ncit_doid_srga --experiment ncit_doid_srga_prf_smoke          # A0 on val, sanity check
+uv run cga run evaluate --dataset ncit_doid_srga --experiment ncit_doid_srga_prf                # val table (filters on/off, greedy/top1)
+uv run cga run evaluate --dataset ncit_doid_srga --experiment ncit_doid_srga_prf_test           # test, train-only lineage
+uv run cga run evaluate --dataset ncit_doid_srga_full --experiment ncit_doid_srga_prf_full_test # test, full-data lineage (BioGITOM's training pairs)
+uv run python scripts/srga_prf_table.py --dataset ncit_doid_srga --run <evaluate_run_id>        # mean +- std tables from a run
+uv run python scripts/srga_prf_threshold.py --split val --group A11="srga-gcn-l0.25-s{seed}" --group A12="gcn-full-e200-s{seed}" --fuse A19=A11:0.5,A12:0.5 --report A12 --report A19
 ```
 
 In `--set`, write small floats as `0.0001`, not `1e-4` (YAML reads the latter as a string).

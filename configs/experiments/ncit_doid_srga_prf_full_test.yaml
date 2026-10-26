@@ -1,0 +1,36 @@
+# Sprint 8 Phase 8.2 -- BioGITOM-style P/R/F1 on TEST for the full-data lineage ncit_doid_srga_full (A25: all 1,406 train pairs,
+# the same training pairs as BioGITOM). The "comparable to BioGITOM" rows come from this lineage.
+#   uv run cga run evaluate --dataset ncit_doid_srga_full --experiment ncit_doid_srga_prf_full_test
+evaluate:
+  methods:
+    - {method_id: sapbert, label: "SapBERT (A0)", kind: embedding_store, embedder_id: hf_mean_pool-sapbert, ref: latest}
+    - {method_id: "full-mlp-l0.25-s42", label: "A25 A3 seed 42", kind: gcl_run, model_id: "full-mlp-l0.25-s42", ref: latest}
+    - {method_id: "full-mlp-l0.25-s43", label: "A25 A3 seed 43", kind: gcl_run, model_id: "full-mlp-l0.25-s43", ref: latest}
+    - {method_id: "full-mlp-l0.25-s44", label: "A25 A3 seed 44", kind: gcl_run, model_id: "full-mlp-l0.25-s44", ref: latest}
+    - {method_id: "full-gcn-l0.25-s42", label: "A25 A11 seed 42", kind: gcl_run, model_id: "full-gcn-l0.25-s42", ref: latest}
+    - {method_id: "full-gcn-l0.25-s43", label: "A25 A11 seed 43", kind: gcl_run, model_id: "full-gcn-l0.25-s43", ref: latest}
+    - {method_id: "full-gcn-l0.25-s44", label: "A25 A11 seed 44", kind: gcl_run, model_id: "full-gcn-l0.25-s44", ref: latest}
+    - {method_id: "full-gcn-e200-s42", label: "A25 A12 seed 42", kind: gcl_run, model_id: "full-gcn-e200-s42", ref: latest}
+    - {method_id: "full-gcn-e200-s43", label: "A25 A12 seed 43", kind: gcl_run, model_id: "full-gcn-e200-s43", ref: latest}
+    - {method_id: "full-gcn-e200-s44", label: "A25 A12 seed 44", kind: gcl_run, model_id: "full-gcn-e200-s44", ref: latest}
+    - method_id: "A25-A19"
+      label: "A25 fusion = 0.5 A12 ens + 0.5 A11 ens"
+      kind: fusion
+      members:
+        - {kind: gcl_run, model_id: "full-gcn-l0.25-s42", ref: latest, weight: 0.5}
+        - {kind: gcl_run, model_id: "full-gcn-l0.25-s43", ref: latest, weight: 0.5}
+        - {kind: gcl_run, model_id: "full-gcn-l0.25-s44", ref: latest, weight: 0.5}
+        - {kind: gcl_run, model_id: "full-gcn-e200-s42", ref: latest, weight: 0.5}
+        - {kind: gcl_run, model_id: "full-gcn-e200-s43", ref: latest, weight: 0.5}
+        - {kind: gcl_run, model_id: "full-gcn-e200-s44", ref: latest, weight: 0.5}
+  evaluations:
+    - {evaluation_id: prf_test_greedy_nofilt, kind: gold_alignment_prf, params: {split: test, assignment: greedy_one_to_one, biogitom_filters: false}}
+    - {evaluation_id: prf_test_top1_nofilt, kind: gold_alignment_prf, params: {split: test, assignment: top1, biogitom_filters: false}}
+    - {evaluation_id: prf_test_greedy_filt, kind: gold_alignment_prf, params: {split: test, assignment: greedy_one_to_one, biogitom_filters: true}}
+    - {evaluation_id: prf_test_top1_filt, kind: gold_alignment_prf, params: {split: test, assignment: top1, biogitom_filters: true}}
+    # Val-chosen thresholds (scripts/srga_prf_threshold.py on val, train-only models, filters on): A12 -> 0.60, A19 -> 0.55.
+    # Labelled threshold-ablation rows; the comparable headline stays threshold 0.0.
+    - {evaluation_id: prf_test_greedy_filt_thr0.60,   kind: gold_alignment_prf, params: {split: test, assignment: greedy_one_to_one, biogitom_filters: true,  threshold: 0.60}}
+    - {evaluation_id: prf_test_greedy_filt_thr0.55,   kind: gold_alignment_prf, params: {split: test, assignment: greedy_one_to_one, biogitom_filters: true,  threshold: 0.55}}
+    - {evaluation_id: prf_test_greedy_nofilt_thr0.60, kind: gold_alignment_prf, params: {split: test, assignment: greedy_one_to_one, biogitom_filters: false, threshold: 0.60}}
+    - {evaluation_id: prf_test_greedy_nofilt_thr0.55, kind: gold_alignment_prf, params: {split: test, assignment: greedy_one_to_one, biogitom_filters: false, threshold: 0.55}}

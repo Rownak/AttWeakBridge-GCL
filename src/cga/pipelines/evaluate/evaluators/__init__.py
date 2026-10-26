@@ -45,6 +45,7 @@ class Evaluator(Protocol):
 from cga.pipelines.evaluate.evaluators import (  # noqa: E402,F401
     cluster_quality,
     gold_alignment,
+    gold_alignment_prf,
     gold_alignment_rerank,
     neighborhood,
 )
