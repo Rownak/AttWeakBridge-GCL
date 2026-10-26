@@ -182,3 +182,26 @@ def test_val_split_queries_only_val_pairs():
     assert out[("m", "global", "mrr", None)].n_queries == 1
     # s2's test target t_d is another gold target of s2, so global mode drops it and t_c ranks first.
     assert out[("m", "global", "mrr", None)].metric_value == pytest.approx(1.0)
+
+
+def test_sibling_filter_splits_restricts_which_splits_feed_the_filter():
+    # BASE_ALIGNMENTS: the sibling t_a of (s1, t_c) is a *train* pair. By default it is filtered out of the
+    # global pool (s1 -> t_c ranks 2nd); restricted to [test] the train pair is ignored and t_a stays (3rd).
+    default = _run(_res(_alignments(BASE_ALIGNMENTS)), ks=[1], modes=["global"])
+    test_only = _run(_res(_alignments(BASE_ALIGNMENTS)), ks=[1], modes=["global"], sibling_filter_splits=["test"])
+    both = _run(_res(_alignments(BASE_ALIGNMENTS)), ks=[1], modes=["global"], sibling_filter_splits=["train", "test"])
+    assert default[("m", "global", "mrr", None)].metric_value == pytest.approx((1 / 2 + 1) / 2)
+    assert test_only[("m", "global", "mrr", None)].metric_value == pytest.approx((1 / 3 + 1) / 2)
+    assert both[("m", "global", "mrr", None)].metric_value == default[("m", "global", "mrr", None)].metric_value
+
+
+def test_sibling_filter_splits_still_filters_siblings_inside_the_scored_split():
+    rows = [("s:1", "t:c", "test", None), ("s:1", "t:a", "test", None)]
+    out = _run(_res(_alignments(rows)), ks=[1], modes=["global"], sibling_filter_splits=["test"])
+    # (s1, t_c) drops sibling t_a -> rank 2; (s1, t_a) drops sibling t_c -> rank 1.
+    assert out[("m", "global", "mrr", None)].metric_value == pytest.approx((1 / 2 + 1) / 2)
+
+
+def test_sibling_filter_splits_must_be_a_list_of_names():
+    with pytest.raises(ConfigError, match="sibling_filter_splits"):
+        _run(_res(_alignments(BASE_ALIGNMENTS)), ks=[1], modes=["global"], sibling_filter_splits="test")

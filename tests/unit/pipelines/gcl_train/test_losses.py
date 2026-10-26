@@ -209,3 +209,40 @@ def test_dropped_pair_stays_in_the_gold_mask():
     # Source 0's other gold target (7) is masked although its pair (0, 7) is not a training pair.
     cols = {int(c) for r, c in zip(data.mask_fwd[0].tolist(), data.mask_fwd[1].tolist()) if r == 0}
     assert data.cand_fwd[sorted(cols)[0]].item() == 7 and len(cols) == 1
+
+
+def test_chunked_infonce_matches_the_unchunked_value_and_gradient() -> None:
+    # 10 rows with chunk_rows=3 exercises four chunks (the last one partial) under checkpointing.
+    torch.manual_seed(0)
+    anchor, positive, negative = (torch.randn(10, 6, requires_grad=True) for _ in range(3))
+    reference = infonce_loss(anchor, positive, negative, temperature=0.1, chunk_rows=1000)
+    reference.backward()
+    expected = [t.grad.clone() for t in (anchor, positive, negative)]
+    for t in (anchor, positive, negative):
+        t.grad = None
+
+    chunked = infonce_loss(anchor, positive, negative, temperature=0.1, chunk_rows=3)
+    chunked.backward()
+
+    assert chunked.item() == pytest.approx(reference.item(), rel=1e-5)
+    for t, grad in zip((anchor, positive, negative), expected):
+        assert torch.allclose(t.grad, grad, atol=1e-6)
+
+
+def test_infonce_with_repeated_negatives_matches_a_naive_in_batch_reference() -> None:
+    # Rows 0, 2 and 4 share one negative vector, rows 1 and 3 another: the distinct-negative rewrite must count each
+    # occurrence, i.e. equal the plain N x N softmax.
+    torch.manual_seed(1)
+    anchor, positive = torch.randn(5, 4), torch.randn(5, 4)
+    base = torch.randn(2, 4)
+    negative = base[[0, 1, 0, 1, 0]]
+    temperature = 0.2
+
+    a, p, n = (torch.nn.functional.normalize(t, dim=1) for t in (anchor, positive, negative))
+    logits = torch.cat([(a * p).sum(1, keepdim=True), a @ n.t()], dim=1) / temperature
+    expected = torch.nn.functional.cross_entropy(logits, torch.zeros(5, dtype=torch.long))
+
+    assert infonce_loss(anchor, positive, negative, temperature=temperature).item() == pytest.approx(expected.item(), rel=1e-5)
+    assert infonce_loss(anchor, positive, negative, temperature=temperature, chunk_rows=2).item() == pytest.approx(
+        expected.item(), rel=1e-5
+    )

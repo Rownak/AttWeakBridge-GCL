@@ -13,7 +13,8 @@ Two retrieval modes, each emitted as its own ``view_id``:
 
 ``global``
     Candidates are every ``graph_2`` node in the method intersection, minus
-    the *other* gold targets of the query's source (any split). Some sources
+    the *other* gold targets of the query's source (any split, or only
+    ``sibling_filter_splits``). Some sources
     have several gold targets (1:n); without this filter a correct sibling
     ranked above the target would count as an error.
 ``candidates``
@@ -66,6 +67,8 @@ class GoldAlignmentEvaluator:
         ks: Hits@K cutoffs, e.g. ``[1, 5, 10]``.
         split: Gold alignment split to query (default ``"test"``).
         modes: Subset of ``["global", "candidates"]`` (default both).
+        sibling_filter_splits: Splits whose gold pairs feed the ``global`` mode's "other gold
+            targets" filter (default: all splits).
     """
 
     def evaluate(self, res: Any, evaluation_id: str, params: dict[str, Any]) -> list[MetricRow]:
@@ -75,7 +78,7 @@ class GoldAlignmentEvaluator:
             res: ``EvalResources``; uses ``methods``, ``method_specs``,
                 ``graph_role_by_node``, ``alignments`` and ``digest``.
             evaluation_id: Config-supplied instance name.
-            params: ``ks``, optional ``split`` and ``modes``.
+            params: ``ks``, optional ``split``, ``modes`` and ``sibling_filter_splits``.
 
         Returns:
             The scored rows.
@@ -107,8 +110,19 @@ class GoldAlignmentEvaluator:
         node_sets = [set(res.methods[mid][0].node_ids) for mid in method_ids]
         shared = set.intersection(*node_sets) if node_sets else set()
 
+        # Default (None) = every split. The unsupervised protocol restricts it to the scored split so
+        # gold train pairs are never read.
+        sibling_splits = params.get("sibling_filter_splits")
+        if sibling_splits is not None and (
+            not isinstance(sibling_splits, list) or not all(isinstance(s, str) for s in sibling_splits)
+        ):
+            raise ConfigError(
+                f"gold_alignment evaluation '{evaluation_id}': sibling_filter_splits must be a list of split names"
+            )
         targets_of: dict[str, set[str]] = {}
         for r in all_rows:
+            if sibling_splits is not None and r["split"] not in sibling_splits:
+                continue
             targets_of.setdefault(r["node_1_id"], set()).add(r["node_2_id"])
 
         role_of = res.graph_role_by_node

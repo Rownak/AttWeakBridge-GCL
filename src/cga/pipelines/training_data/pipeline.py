@@ -14,7 +14,11 @@ and ``evaluate`` still need their embeddings — they are simply never eligible
 to be drawn as an anchor/positive/negative by any sampler, which is what keeps
 a node reserved for evaluating the trained model out of the examples that
 trained it. The ``supervised`` sampler additionally receives every gold
-alignment row so it can exclude gold targets of all splits from its negatives. The node partition itself (``split``) is drawn once
+alignment row so it can exclude gold targets of all splits from its negatives.
+
+``training_data.held_out_policy: none`` (default ``legacy``) skips the held-out derivation entirely: no node is held
+out and ``alignments.parquet`` is never opened, so the pseudo-pairs cannot depend on gold. Under ``protocol:
+unsupervised`` (:mod:`cga.core.protocol`) only that policy and label-free samplers are accepted. The node partition itself (``split``) is drawn once
 by ``ingest`` (§5.1.1), identically for every dataset; this pipeline never
 computes its own split.
 """
@@ -32,6 +36,7 @@ from cga.core.artifacts import ArtifactRef, write_latest
 from cga.core.errors import ArtifactValidationError, ConfigError
 from cga.core.io import write_json
 from cga.core.pipeline import Pipeline, Step
+from cga.core.protocol import get_protocol, is_unsupervised, refuse
 from cga.core.registry import pipelines
 from cga.core.registry import samplers as sampler_registry
 from cga.core.run import RunContext
@@ -46,6 +51,7 @@ from cga.pipelines.training_data.similarity import (
     compute_text_similarity,
 )
 
+_HELD_OUT_POLICIES = ("legacy", "none")
 _HELD_OUT_NODE_SPLITS = frozenset({"val", "test"})
 _HELD_OUT_ALIGNMENT_SPLITS = frozenset({"test", "val"})
 
@@ -82,7 +88,48 @@ def build_sampler_id(sampler_cfg: dict[str, Any]) -> str:
     for param in _SAMPLER_ID_PARAMS.get(name, ()):
         if param in sampler_cfg:
             parts.append(f"{param}{sampler_cfg[param]}")
+    if name == "rank_topk":
+        # Non-default variants get their own lineage; the default id stays ``rank_topk-k{k}``.
+        negatives = sampler_cfg.get("negatives", "bottomk")
+        if negatives != "bottomk":
+            parts.append(f"neg{negatives}")
+            if negatives == "hard":
+                parts.append(f"off{sampler_cfg.get('hard_offset', 10)}")
+        if sampler_cfg.get("positives", "topk") != "topk":
+            parts.append(f"pos{sampler_cfg['positives']}")
     return "-".join(parts)
+
+
+def resolve_held_out_policy(config: dict[str, Any]) -> str:
+    """Return ``training_data.held_out_policy`` (``legacy`` when absent), validated.
+
+    ``legacy`` holds out val/test node splits plus the endpoints of val/test gold alignments
+    (reads ``alignments.parquet``). ``none`` holds nothing out and never reads alignments.
+
+    Raises:
+        ConfigError: On an unknown policy.
+    """
+    policy = config["training_data"].get("held_out_policy", "legacy")
+    if policy not in _HELD_OUT_POLICIES:
+        raise ConfigError(
+            f"Unknown training_data.held_out_policy '{policy}'; expected one of {list(_HELD_OUT_POLICIES)}"
+        )
+    return policy
+
+
+def check_protocol(config: dict[str, Any]) -> None:
+    """Refuse the ``training_data`` options that would read gold alignments under ``protocol: unsupervised``.
+
+    Raises:
+        ConfigError: On the ``supervised`` sampler or any ``held_out_policy`` other than ``none``.
+    """
+    if not is_unsupervised(config):
+        return
+    if config["training_data"].get("sampler", {}).get("name") == "supervised":
+        refuse("training_data", "sampler.name=supervised", "its positives are gold train pairs")
+    policy = resolve_held_out_policy(config)
+    if policy != "none":
+        refuse("training_data", f"held_out_policy={policy}", "it reads alignments.parquet")
 
 
 class _TrainingDataState:
@@ -120,6 +167,8 @@ class BuildUniverseStep:
     def run(self, ctx: RunContext) -> None:
         cfg = ctx.config["training_data"]
         inputs_cfg = cfg["inputs"]
+        check_protocol(ctx.config)
+        held_out_policy = resolve_held_out_policy(ctx.config)
 
         ingest_ref = ArtifactRef(
             lineage_dir=Path(ctx.config["paths"]["processed"]) / ctx.dataset_id,
@@ -155,30 +204,35 @@ class BuildUniverseStep:
         # a fixed ingest run, independent of either store's internal ordering.
         ordered_ids = [nid for nid in nodes_table.column("node_id").to_pylist() if nid in eligible_ids]
 
-        alignments_table = read_alignments(ingest_dir / "alignments.parquet")
-        self._state.alignments_table = alignments_table
-
-        # held_out is the union of two independent conditions (§5.3 step 1):
-        # (a) this dataset's own uniform node partition put the node in
-        #     val/test, or (b) a dataset-provided alignment split (e.g.
-        #     ncit_doid's OAEI refs_equiv/test.tsv) marks it as a test pair
-        #     endpoint. (b) is vacuous for datasets without alignments.
-        alignment_held_out_ids: set[str] = set()
-        if alignments_table.num_rows > 0:
-            for n1, n2, split in zip(
-                alignments_table.column("node_1_id").to_pylist(),
-                alignments_table.column("node_2_id").to_pylist(),
-                alignments_table.column("split").to_pylist(),
-            ):
-                if split in _HELD_OUT_ALIGNMENT_SPLITS:
-                    alignment_held_out_ids.add(n1)
-                    alignment_held_out_ids.add(n2)
-
         split_by_id = [node_split_by_node[nid] for nid in ordered_ids]
-        held_out_by_id = [
-            split in _HELD_OUT_NODE_SPLITS or nid in alignment_held_out_ids
-            for nid, split in zip(ordered_ids, split_by_id)
-        ]
+        if held_out_policy == "none":
+            # alignments.parquet is never opened, so pseudo-pairs cannot depend on it.
+            self._state.alignments_table = None
+            held_out_by_id = [False] * len(ordered_ids)
+        else:
+            alignments_table = read_alignments(ingest_dir / "alignments.parquet")
+            self._state.alignments_table = alignments_table
+
+            # held_out is the union of two independent conditions (§5.3 step 1):
+            # (a) this dataset's own uniform node partition put the node in
+            #     val/test, or (b) a dataset-provided alignment split (e.g.
+            #     ncit_doid's OAEI refs_equiv/test.tsv) marks it as a test pair
+            #     endpoint. (b) is vacuous for datasets without alignments.
+            alignment_held_out_ids: set[str] = set()
+            if alignments_table.num_rows > 0:
+                for n1, n2, split in zip(
+                    alignments_table.column("node_1_id").to_pylist(),
+                    alignments_table.column("node_2_id").to_pylist(),
+                    alignments_table.column("split").to_pylist(),
+                ):
+                    if split in _HELD_OUT_ALIGNMENT_SPLITS:
+                        alignment_held_out_ids.add(n1)
+                        alignment_held_out_ids.add(n2)
+
+            held_out_by_id = [
+                split in _HELD_OUT_NODE_SPLITS or nid in alignment_held_out_ids
+                for nid, split in zip(ordered_ids, split_by_id)
+            ]
 
         universe = NodeUniverse(
             node_ids=ordered_ids,
@@ -253,7 +307,8 @@ class SampleStep:
 
         alignments = None
         if sampler_name == "supervised":
-            assert state.alignments_table is not None
+            if state.alignments_table is None:
+                raise ConfigError("sampler 'supervised' needs training_data.held_out_policy: legacy (it reads alignments)")
             # Pass the full gold set (every split), unfiltered: the sampler
             # needs test pairs to keep their targets out of the negatives.
             # Positives are still train-only and restricted to the
@@ -362,7 +417,19 @@ class ValidateAndManifestStep:
         for split in state.examples_table.column("split").to_pylist():
             split_counts[split] += 1
 
+        # A pseudo-pair is a distinct (anchor, text positive); the sampler repeats it once per negative.
+        n_pseudo_pairs = len(
+            set(
+                zip(
+                    state.examples_table.column("anchor_id").to_pylist(),
+                    state.examples_table.column("text_pos_id").to_pylist(),
+                )
+            )
+        )
         stats = {
+            "protocol": get_protocol(ctx.config),
+            "held_out_policy": resolve_held_out_policy(ctx.config),
+            "n_pseudo_pairs": n_pseudo_pairs,
             "n_universe_nodes": len(state.universe.node_ids),
             "n_held_out_nodes": len(held_out_ids),
             "sampler": state.sampler_name,

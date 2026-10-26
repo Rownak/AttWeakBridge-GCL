@@ -21,6 +21,7 @@ from typing import Protocol
 
 import torch
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
 
 from cga.core.registry import losses
 
@@ -54,9 +55,36 @@ def triplet_loss(
     return torch.relu(pos_dist - neg_dist + margin).mean()
 
 
+_INFONCE_CHUNK_ROWS = 2048
+
+
+def _infonce_rows(
+    anchor_n: torch.Tensor,
+    positive_n: torch.Tensor,
+    negative_n: torch.Tensor,
+    log_counts: torch.Tensor,
+    temperature: float,
+) -> torch.Tensor:
+    """Sum (not mean) of the InfoNCE cross-entropy over the given anchor rows.
+
+    ``negative_n`` holds distinct negatives and ``log_counts`` the log of how often each occurs in the batch; adding it
+    to a logit makes ``exp`` count that negative once per occurrence, as the plain in-batch formulation does.
+    """
+    positive_logit = torch.sum(anchor_n * positive_n, dim=1, keepdim=True) / temperature
+    negative_logits = (anchor_n @ negative_n.t()) / temperature + log_counts
+    logits = torch.cat([positive_logit, negative_logits], dim=1)
+    labels = torch.zeros(logits.size(0), dtype=torch.long, device=anchor_n.device)
+    return F.cross_entropy(logits, labels, reduction="sum")
+
+
 @losses.register("infonce")
 def infonce_loss(
-    anchor: torch.Tensor, positive: torch.Tensor, negative: torch.Tensor, *, temperature: float = 0.1
+    anchor: torch.Tensor,
+    positive: torch.Tensor,
+    negative: torch.Tensor,
+    *,
+    temperature: float = 0.1,
+    chunk_rows: int = _INFONCE_CHUNK_ROWS,
 ) -> torch.Tensor:
     """In-batch InfoNCE: each row's positive against its own negative plus every other row's negative.
 
@@ -65,17 +93,43 @@ def infonce_loss(
     practice and strictly more informative than one negative per anchor
     without introducing any new positive/negative source beyond
     ``examples.parquet``'s own per-row negative column.
+
+    The training loop is full-batch, so ``N`` is the number of examples (about 1e5 for NCIT-DOID) and the
+    ``N x N`` logit matrix would need tens of GB. Two exact rewrites keep it small:
+
+    - Negatives repeat heavily (``rank_topk`` bottom-k negatives are shared by many anchors), so identical negative
+      rows are collapsed to distinct ones and each logit is shifted by ``log(count)``; the sum of ``exp`` is unchanged.
+    - Rows are processed ``chunk_rows`` at a time under activation checkpointing, so the backward pass recomputes a
+      chunk's logits instead of storing them.
+
+    The value and gradient equal the plain formulation up to float summation order.
     """
     anchor_n = F.normalize(anchor, p=2, dim=1)
     positive_n = F.normalize(positive, p=2, dim=1)
     negative_n = F.normalize(negative, p=2, dim=1)
 
-    positive_logit = torch.sum(anchor_n * positive_n, dim=1, keepdim=True) / temperature
-    negative_logits = (anchor_n @ negative_n.t()) / temperature
+    n = anchor_n.size(0)
+    # Identical rows come from the same embedding row, so they are bitwise equal; any occurrence represents its group.
+    _, inverse, counts = torch.unique(negative_n.detach(), dim=0, return_inverse=True, return_counts=True)
+    representative = torch.zeros_like(counts).scatter_(0, inverse, torch.arange(n, device=inverse.device))
+    distinct_n = negative_n[representative]
+    log_counts = counts.to(anchor_n.dtype).log()
 
-    logits = torch.cat([positive_logit, negative_logits], dim=1)
-    labels = torch.zeros(logits.size(0), dtype=torch.long, device=anchor.device)
-    return F.cross_entropy(logits, labels)
+    if n <= chunk_rows or not torch.is_grad_enabled():
+        return _infonce_rows(anchor_n, positive_n, distinct_n, log_counts, temperature) / n
+    total = anchor_n.new_zeros(())
+    for start in range(0, n, chunk_rows):
+        stop = start + chunk_rows
+        total = total + checkpoint(
+            _infonce_rows,
+            anchor_n[start:stop],
+            positive_n[start:stop],
+            distinct_n,
+            log_counts,
+            temperature,
+            use_reentrant=False,
+        )
+    return total / n
 
 
 def sample_pairs_by_source(pairs: list[tuple[int, int]], fraction: float, seed: int) -> list[tuple[int, int]]:

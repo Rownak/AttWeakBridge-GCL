@@ -275,6 +275,26 @@ uv run python scripts/srga_prf_table.py --dataset ncit_doid_srga --run <evaluate
 uv run python scripts/srga_prf_threshold.py --split val --group A11="srga-gcn-l0.25-s{seed}" --group A12="gcn-full-e200-s{seed}" --fuse A19=A11:0.5,A12:0.5 --report A12 --report A19
 ```
 
+## Unsupervised ablations (`ncit_doid_unsup`, `attack_cwe_unsup`)
+
+Sprint 9 ([plan](dev_docs/sprints/sprint_9.md)): no gold alignment in training. `protocol: unsupervised` (set in the dataset configs) makes
+`training_data` refuse the `supervised` sampler and `held_out_policy: legacy`, and `gcl_train` refuse `infonce_full`, `monitor.enabled` and a
+`training_data` run that was not built with `held_out_policy: none`. Gold `test` pairs are read only by `evaluate`.
+
+```bash
+# Ingest with no split (every node is an anchor and a candidate); copy the frozen stores without shards/ and verify them
+uv run cga run ingest --dataset ncit_doid_unsup --set "ingest.split.fractions=[1.0,0.0,0.0]"
+uv run python scripts/copy_embedding_store.py --src artifacts/embeddings/ncit_doid_srga_full/hf_mean_pool-bert_base/<run>     --dst-lineage artifacts/embeddings/ncit_doid_unsup/hf_mean_pool-bert_base --ingest data/processed/ncit_doid_unsup/<ingest_run> --text-variant label_synonyms_definition
+# One matrix row, one seed S (unsup_u1 = BERT + projection, unsup_u2 = BERT + GCN)
+uv run cga run training_data --dataset ncit_doid_unsup --experiment unsup_u2 --set seed=S
+uv run cga run gcl_train     --dataset ncit_doid_unsup --experiment unsup_u2 --set seed=S --set gcl_train.model.model_id=u2-sS
+uv run cga run evaluate      --dataset ncit_doid_unsup --experiment ncit_doid_unsup_smoke
+uv run python scripts/unsup_summary.py --dataset ncit_doid_unsup --run <evaluate_run_id>   # summary.md / summary.csv in that run
+```
+
+New default-off options: `training_data.held_out_policy: none` (nothing held out, `alignments.parquet` never read), `rank_topk`
+`negatives: bottomk|random|hard` (+ `hard_offset`) and `positives: topk|mutual`, and `gold_alignment` `sibling_filter_splits: [test]`.
+
 In `--set`, write small floats as `0.0001`, not `1e-4` (YAML reads the latter as a string).
 
 ## Configuration

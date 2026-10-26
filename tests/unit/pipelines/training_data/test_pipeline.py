@@ -6,11 +6,13 @@ import hashlib
 from pathlib import Path
 
 import numpy as np
+import pytest
 import pyarrow as pa
 import pyarrow.parquet as pq
 
 import cga.pipelines  # noqa: F401  (registers pipelines)
 from cga.core.artifacts import write_latest
+from cga.core.errors import ConfigError
 from cga.core.io import read_json
 from cga.core.registry import pipelines
 from cga.core.run import RunContext
@@ -437,3 +439,127 @@ def test_val_alignment_endpoints_are_held_out_and_absent_from_examples(tmp_path)
     used |= set(examples.column("text_neg_id").to_pylist())
     assert {"ncit:1", "doid:1"}.isdisjoint(used)
     assert {"ncit:2", "doid:2"} <= used
+
+
+# --- Sprint 9.1: held_out_policy and the unsupervised protocol guard ---------------------------------------------------
+
+_TEST_ALIGNMENTS = [
+    {"node_1_id": "ncit:1", "node_2_id": "doid:1", "split": "test"},
+    {"node_1_id": "ncit:2", "node_2_id": "doid:2", "split": "train"},
+]
+
+
+def _unsup_config(tmp_path: Path, **sampler_extra) -> dict:
+    config = _build_config(tmp_path, sampler_extra=sampler_extra)
+    config["protocol"] = "unsupervised"
+    config["training_data"]["held_out_policy"] = "none"
+    return config
+
+
+def _example_rows(ctx: RunContext) -> list[dict]:
+    return read_examples(ctx.run_dir / "examples.parquet").to_pylist()
+
+
+def test_held_out_none_makes_every_node_eligible(tmp_path):
+    config = _build_config(tmp_path)
+    config["training_data"]["held_out_policy"] = "none"
+    # A test pair and a val node split would hold nodes out under `legacy`.
+    _setup_stores(config, tmp_path, alignment_rows=_TEST_ALIGNMENTS, node_splits={"ncit:3": "val"})
+
+    ctx = _run_training_data(config, tmp_path)
+
+    universe = NodeUniverse.from_parquet(ctx.run_dir / "universe.parquet")
+    assert not any(universe.held_out)
+    anchors = {row["anchor_id"] for row in _example_rows(ctx)}
+    assert {"ncit:1", "doid:1"} <= anchors  # the test-pair endpoints are ordinary anchors
+
+
+def test_held_out_none_pseudo_pairs_identical_with_and_without_alignments(tmp_path):
+    config = _unsup_config(tmp_path)
+    _setup_stores(config, tmp_path, alignment_rows=_TEST_ALIGNMENTS)
+    with_alignments = _example_rows(_run_training_data(config, tmp_path))
+
+    ingest_dir = Path(config["paths"]["processed"]) / "ncit_doid" / "20260101T000000Z-aaaaaaaa"
+    (ingest_dir / "alignments.parquet").unlink()
+    config["run"]["name"] = "no-alignments"  # distinct config hash, so the run id differs within one second
+    without_alignments = _example_rows(_run_training_data(config, tmp_path))
+
+    assert with_alignments  # a vacuous comparison would prove nothing
+    assert with_alignments == without_alignments
+
+
+def test_legacy_policy_still_holds_out_test_endpoints(tmp_path):
+    config = _build_config(tmp_path)
+    assert "held_out_policy" not in config["training_data"]
+    _setup_stores(config, tmp_path, alignment_rows=_TEST_ALIGNMENTS)
+
+    ctx = _run_training_data(config, tmp_path)
+
+    anchors = {row["anchor_id"] for row in _example_rows(ctx)}
+    assert not ({"ncit:1", "doid:1"} & anchors)
+    assert read_json(ctx.run_dir / "stats.json")["held_out_policy"] == "legacy"
+
+
+def test_unknown_held_out_policy_is_rejected(tmp_path):
+    config = _build_config(tmp_path)
+    config["training_data"]["held_out_policy"] = "gold"
+    _setup_stores(config, tmp_path, alignment_rows=[])
+    with pytest.raises(ConfigError, match="held_out_policy"):
+        _run_training_data(config, tmp_path)
+
+
+def test_unsupervised_guard_refuses_supervised_sampler(tmp_path):
+    config = _unsup_config(tmp_path)
+    config["training_data"]["sampler"] = {"name": "supervised", "negatives_per_positive": 2}
+    _setup_stores(config, tmp_path, alignment_rows=_TEST_ALIGNMENTS)
+    with pytest.raises(ConfigError, match="supervised"):
+        _run_training_data(config, tmp_path)
+
+
+def test_unsupervised_guard_refuses_legacy_held_out_policy(tmp_path):
+    config = _unsup_config(tmp_path)
+    config["training_data"]["held_out_policy"] = "legacy"
+    _setup_stores(config, tmp_path, alignment_rows=_TEST_ALIGNMENTS)
+    with pytest.raises(ConfigError, match="alignments.parquet"):
+        _run_training_data(config, tmp_path)
+
+    del config["training_data"]["held_out_policy"]  # the default is legacy, so it is refused too
+    with pytest.raises(ConfigError, match="alignments.parquet"):
+        _run_training_data(config, tmp_path)
+
+
+def test_unknown_protocol_is_rejected(tmp_path):
+    config = _unsup_config(tmp_path)
+    config["protocol"] = "semi"
+    _setup_stores(config, tmp_path, alignment_rows=[])
+    with pytest.raises(ConfigError, match="protocol"):
+        _run_training_data(config, tmp_path)
+
+
+def test_manifest_summary_records_protocol_policy_and_pseudo_pairs(tmp_path):
+    config = _unsup_config(tmp_path)
+    _setup_stores(config, tmp_path, alignment_rows=[])
+
+    ctx = _run_training_data(config, tmp_path)
+
+    summary = read_json(ctx.run_dir / "manifest.json")["summary"]
+    rows = _example_rows(ctx)
+    assert summary["protocol"] == "unsupervised"
+    assert summary["held_out_policy"] == "none"
+    assert summary["n_pseudo_pairs"] == len({(r["anchor_id"], r["text_pos_id"]) for r in rows})
+    assert 0 < summary["n_pseudo_pairs"] <= summary["n_examples"]
+
+
+def test_supervised_sampler_with_policy_none_is_rejected(tmp_path):
+    config = _build_config(tmp_path, sampler_name="supervised")  # protocol absent: not guarded
+    config["training_data"]["held_out_policy"] = "none"
+    _setup_stores(config, tmp_path, alignment_rows=_TEST_ALIGNMENTS)
+    with pytest.raises(ConfigError, match="held_out_policy"):
+        _run_training_data(config, tmp_path)
+
+
+def test_build_sampler_id_new_rank_topk_options():
+    assert build_sampler_id({"name": "rank_topk", "k": 5, "negatives": "bottomk", "positives": "topk"}) == "rank_topk-k5"
+    assert build_sampler_id({"name": "rank_topk", "k": 5, "negatives": "random"}) == "rank_topk-k5-negrandom"
+    assert build_sampler_id({"name": "rank_topk", "k": 5, "negatives": "hard"}) == "rank_topk-k5-neghard-off10"
+    assert build_sampler_id({"name": "rank_topk", "k": 5, "positives": "mutual"}) == "rank_topk-k5-posmutual"

@@ -29,6 +29,7 @@ from cga.core.artifacts import ArtifactRef, write_latest
 from cga.core.errors import ArtifactValidationError, ConfigError
 from cga.core.io import read_json, write_json
 from cga.core.pipeline import Pipeline, Step
+from cga.core.protocol import get_protocol, is_unsupervised, refuse
 from cga.core.registry import pipelines
 from cga.core.run import RunContext
 from cga.data.aligned import AlignedMatrix, NodeUniverse
@@ -74,8 +75,24 @@ class _GclTrainState:
         self.model: torch.nn.Module | None = None
         self.final_embeddings: torch.Tensor | None = None
         self.training_data_run_id: str = ""
+        self.training_data_summary: dict[str, Any] = {}
         self.text_embedding_run_id: str = ""
         self.graph_embedding_run_id: str = ""
+
+
+def check_protocol(config: dict[str, Any]) -> None:
+    """Refuse the ``gcl_train`` options that would read gold alignments under ``protocol: unsupervised``.
+
+    Raises:
+        ConfigError: On ``infonce_full`` (its softmax mask reads gold pairs) or ``monitor.enabled``.
+    """
+    if not is_unsupervised(config):
+        return
+    cfg = config["gcl_train"]
+    if cfg["loss"]["name"] == "infonce_full":
+        refuse("gcl_train", "loss.name=infonce_full", "its softmax mask reads alignments.parquet")
+    if (cfg.get("monitor") or {}).get("enabled"):
+        refuse("gcl_train", "monitor.enabled=true", "in-loop progress metrics score against gold pairs")
 
 
 def _find_input(manifest: dict[str, Any], name: str) -> dict[str, Any]:
@@ -96,6 +113,7 @@ class LoadStep:
     def run(self, ctx: RunContext) -> None:
         state = self._state
         cfg = ctx.config["gcl_train"]
+        check_protocol(ctx.config)
 
         sampler_id = cfg["inputs"]["training_data_sampler_id"]
         training_data_lineage = (
@@ -108,6 +126,16 @@ class LoadStep:
 
         td_manifest = read_json(training_data_dir / "manifest.json")
         state.training_data_run_id = training_data_dir.name
+        state.training_data_summary = td_manifest.get("summary") or {}
+        if is_unsupervised(ctx.config) and state.training_data_summary.get("held_out_policy") != "none":
+            # Legacy held-out nodes are chosen from gold test endpoints, so even a label-free sampler
+            # would have been shaped by gold.
+            refuse(
+                "gcl_train",
+                f"training_data run {training_data_dir.name} (held_out_policy="
+                f"{state.training_data_summary.get('held_out_policy')!r})",
+                "it was not built with held_out_policy: none",
+            )
 
         text_input = _find_input(td_manifest, "text_embeddings")
         graph_input = _find_input(td_manifest, "graph_embeddings")
@@ -436,6 +464,9 @@ class ManifestStep:
             "n_examples_train": state.n_examples_train,
             "n_trainable_params": state.n_trainable_params,
             "n_positive_pairs": state.n_positive_pairs,
+            "protocol": get_protocol(ctx.config),
+            "held_out_policy": state.training_data_summary.get("held_out_policy"),
+            "n_pseudo_pairs": state.training_data_summary.get("n_pseudo_pairs"),
         }
 
 

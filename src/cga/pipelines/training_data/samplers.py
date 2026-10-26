@@ -26,6 +26,9 @@ from cga.pipelines.training_data.similarity import SimilarityMatrix
 
 ExampleTuple = tuple[str, str, str, str, str]
 
+_NEGATIVES = ("bottomk", "random", "hard")
+_POSITIVES = ("topk", "mutual")
+
 
 class Sampler(Protocol):
     """A registered sampler: similarity views + config -> example tuples."""
@@ -83,10 +86,48 @@ def _topk_bottomk_indices(
     return top, bottom
 
 
+def _descending_ranks(row: np.ndarray, *, exclude_index: int | None = None) -> np.ndarray:
+    """Return every column index of ``row`` by descending similarity.
+
+    Uses the same stable ascending sort as :func:`_topk_bottomk_indices` and reverses it, so
+    ``_descending_ranks(row)[:k]`` equals that function's ``top``.
+    """
+    if exclude_index is None:
+        return np.argsort(row, kind="stable")[::-1]
+    keep = np.flatnonzero(np.arange(len(row)) != exclude_index)
+    return keep[np.argsort(row[keep], kind="stable")][::-1]
+
+
+def _topk_membership(values: np.ndarray, k: int, *, exclude_diagonal: bool):
+    """Return ``in_topk(row, col)``: is column ``col`` among the top-``k`` of row ``row`` of ``values``?
+
+    Rows are ranked lazily and cached, so only the rows a caller asks about are sorted.
+
+    Args:
+        values: Similarity matrix.
+        k: Top-k size.
+        exclude_diagonal: Drop a row's own column before ranking (within-graph matrices).
+    """
+    cache: dict[int, set[int]] = {}
+
+    def in_topk(row: int, col: int) -> bool:
+        if row not in cache:
+            top, _ = _topk_bottomk_indices(values[row], k, exclude_index=row if exclude_diagonal else None)
+            cache[row] = set(top.tolist())
+        return col in cache[row]
+
+    return in_topk
+
+
 def _rank_topk_one_direction(
     text_sim: SimilarityMatrix,
     graph_sim: SimilarityMatrix,
     k: int,
+    *,
+    negatives: str = "bottomk",
+    positives: str = "topk",
+    hard_offset: int = 10,
+    rng: random.Random | None = None,
 ) -> list[ExampleTuple]:
     """Emit rank-zipped (anchor, text_pos, text_neg, graph_pos, graph_neg) tuples for one anchor set.
 
@@ -101,25 +142,56 @@ def _rank_topk_one_direction(
     otherwise the anchor's guaranteed rank-0 similarity to itself (1.0) would
     make it its own "positive" neighbor. ``text_sim`` is cross-graph and has
     no such diagonal, so no exclusion is needed there.
+
+    ``positives="mutual"`` keeps a top-k positive of either view only when the anchor is also in
+    that positive's own top-k, so fewer than k positives may survive and the zip stops at the
+    shortest list. ``negatives`` changes the **text** negatives only (graph negatives stay
+    bottom-k): ``random`` draws up to k columns outside the positives with ``rng``, ``hard`` takes
+    ranks ``hard_offset+1 … hard_offset+k``.
     """
     text_row_of = {nid: i for i, nid in enumerate(text_sim.row_ids)}
     graph_row_of = {nid: i for i, nid in enumerate(graph_sim.row_ids)}
     graph_col_of = {nid: i for i, nid in enumerate(graph_sim.col_ids)}
     anchors = [nid for nid in text_sim.row_ids if nid in graph_row_of]
 
+    text_mutual = graph_mutual = None
+    if positives == "mutual":
+        # Reverse view of the text matrix: row = candidate positive, column = anchor.
+        text_mutual = _topk_membership(text_sim.values.T, k, exclude_diagonal=False)
+        graph_mutual = _topk_membership(graph_sim.values, k, exclude_diagonal=True)
+
+    n_text_cols = len(text_sim.col_ids)
     examples: list[ExampleTuple] = []
     for anchor_id in anchors:
-        text_top, text_bottom = _topk_bottomk_indices(text_sim.values[text_row_of[anchor_id]], k)
+        anchor_text_row = text_row_of[anchor_id]
+        text_row = text_sim.values[anchor_text_row]
+        text_top, text_bottom = _topk_bottomk_indices(text_row, k)
+        anchor_graph_row = graph_row_of[anchor_id]
         graph_top, graph_bottom = _topk_bottomk_indices(
-            graph_sim.values[graph_row_of[anchor_id]], k, exclude_index=graph_col_of.get(anchor_id)
+            graph_sim.values[anchor_graph_row], k, exclude_index=graph_col_of.get(anchor_id)
         )
-        n = min(len(text_top), len(graph_top))
+
+        if text_mutual is not None and graph_mutual is not None:
+            text_top = np.array([j for j in text_top if text_mutual(int(j), anchor_text_row)], dtype=np.int64)
+            graph_top = np.array([j for j in graph_top if graph_mutual(int(j), anchor_graph_row)], dtype=np.int64)
+
+        if negatives == "random":
+            assert rng is not None
+            drawn = rng.sample(range(n_text_cols), min(n_text_cols, k + len(text_top)))
+            positive_set = set(text_top.tolist())
+            text_neg = [j for j in drawn if j not in positive_set][:k]
+        elif negatives == "hard":
+            text_neg = _descending_ranks(text_row)[hard_offset : hard_offset + k].tolist()
+        else:
+            text_neg = text_bottom.tolist()
+
+        n = min(len(text_top), len(graph_top), len(text_neg), len(graph_bottom))
         for j in range(n):
             examples.append(
                 (
                     anchor_id,
                     text_sim.col_ids[text_top[j]],
-                    text_sim.col_ids[text_bottom[j]],
+                    text_sim.col_ids[text_neg[j]],
                     graph_sim.col_ids[graph_top[j]],
                     graph_sim.col_ids[graph_bottom[j]],
                 )
@@ -147,19 +219,41 @@ def rank_topk_sampler(
     "positive" (a deviation from the legacy ``get_sample_10``, which did not
     exclude it; see the Sprint 1.5 execution log). Symmetric for ``graph_2``
     anchors.
+
+    Options (defaults reproduce the behaviour above exactly):
+
+    - ``negatives``: ``bottomk`` | ``random`` | ``hard`` (text negatives; ``hard`` uses
+      ``hard_offset``, default 10, and needs ``hard_offset >= k`` so top pseudo-positives are
+      not reused as negatives).
+    - ``positives``: ``topk`` | ``mutual`` (keep a top-k positive only if the anchor is also in
+      the positive's top-k).
+
+    Raises:
+        ConfigError: On an unknown ``negatives``/``positives`` or ``hard_offset < k``.
     """
     k = config.get("k", 30)
+    negatives = config.get("negatives", "bottomk")
+    positives = config.get("positives", "topk")
+    hard_offset = config.get("hard_offset", 10)
+    if negatives not in _NEGATIVES:
+        raise ConfigError(f"Unknown rank_topk negatives '{negatives}'; expected one of {list(_NEGATIVES)}")
+    if positives not in _POSITIVES:
+        raise ConfigError(f"Unknown rank_topk positives '{positives}'; expected one of {list(_POSITIVES)}")
+    if negatives == "hard" and hard_offset < k:
+        raise ConfigError(f"rank_topk hard_offset ({hard_offset}) must be >= k ({k})")
 
-    g1_examples = _rank_topk_one_direction(text_g1_g2, graph_g1, k)
+    # One RNG for random negatives and the final shuffle; the default path never draws before the shuffle.
+    rng = random.Random(seed)
+    options = {"negatives": negatives, "positives": positives, "hard_offset": hard_offset, "rng": rng}
+    g1_examples = _rank_topk_one_direction(text_g1_g2, graph_g1, k, **options)
 
     # graph_2 direction: text view is transposed (graph_2 anchors -> graph_1 columns).
     text_g2_g1 = SimilarityMatrix(
         row_ids=text_g1_g2.col_ids, col_ids=text_g1_g2.row_ids, values=text_g1_g2.values.T
     )
-    g2_examples = _rank_topk_one_direction(text_g2_g1, graph_g2, k)
+    g2_examples = _rank_topk_one_direction(text_g2_g1, graph_g2, k, **options)
 
     examples = g1_examples + g2_examples
-    rng = random.Random(seed)
     rng.shuffle(examples)
     return examples
 

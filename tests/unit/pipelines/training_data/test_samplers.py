@@ -308,3 +308,102 @@ def test_supervised_bottomk_is_the_default_and_unchanged():
 def test_supervised_unknown_text_negatives_raises():
     with pytest.raises(ConfigError):
         _run_supervised(text_negatives="hardest")
+
+
+# --- Sprint 9.1: rank_topk negatives / positives options ---------------------------------------------------------------
+
+
+def _wide_views(text_rows: list[list[float]]):
+    """Two graph_1 anchors against six graph_2 columns; within-graph views as in ``_small_views``."""
+    _, graph_g1, graph_g2 = _small_views()
+    text = SimilarityMatrix(
+        row_ids=["a:1", "a:2"],
+        col_ids=[f"b:{i}" for i in range(1, 7)],
+        values=np.array(text_rows, dtype=np.float32),
+    )
+    return text, graph_g1, graph_g2
+
+
+# a:1 ranks b:1 > b:2 > b:3 > b:4 > b:5 > b:6; a:2 likes b:2 first, then the rest in the same order.
+_WIDE_TEXT = [[0.9, 0.8, 0.7, 0.6, 0.2, 0.1], [0.5, 0.9, 0.4, 0.3, 0.2, 0.1]]
+
+
+def _g1_examples(config: dict, text_rows=_WIDE_TEXT, seed: int = 0):
+    text, graph_g1, graph_g2 = _wide_views(text_rows)
+    examples = rank_topk_sampler(text_g1_g2=text, graph_g1=graph_g1, graph_g2=graph_g2, config=config, seed=seed)
+    return sorted(e for e in examples if e[0] in ("a:1", "a:2"))
+
+
+def test_rank_topk_explicit_defaults_equal_omitted_options():
+    base = _g1_examples({"k": 2})
+    explicit = _g1_examples({"k": 2, "negatives": "bottomk", "positives": "topk"})
+    assert base == explicit
+    assert [e[2] for e in base if e[0] == "a:1"] == ["b:6", "b:5"]  # bottom-k, ascending
+
+
+def test_rank_topk_hard_negatives_use_ranks_after_the_offset():
+    examples = _g1_examples({"k": 2, "negatives": "hard", "hard_offset": 2})
+    a1 = [e for e in examples if e[0] == "a:1"]
+    # Positives are ranks 1-2 (b:1, b:2); hard negatives are ranks 3-4 (b:3, b:4), zipped by rank.
+    assert [(e[1], e[2]) for e in a1] == [("b:1", "b:3"), ("b:2", "b:4")]
+    a2 = [e for e in examples if e[0] == "a:2"]
+    # a:2 ranks b:2 > b:1 > b:3 > b:4: positives b:2, b:1; negatives b:3, b:4 (examples are sorted).
+    assert [(e[1], e[2]) for e in a2] == [("b:1", "b:4"), ("b:2", "b:3")]
+
+
+def test_rank_topk_hard_offset_past_the_columns_yields_no_examples():
+    assert _g1_examples({"k": 2, "negatives": "hard", "hard_offset": 6}) == []
+
+
+def test_rank_topk_hard_offset_below_k_is_rejected():
+    with pytest.raises(ConfigError, match="hard_offset"):
+        _g1_examples({"k": 3, "negatives": "hard", "hard_offset": 2})
+
+
+def test_rank_topk_random_negatives_avoid_positives_and_are_seeded():
+    first = _g1_examples({"k": 2, "negatives": "random"}, seed=7)
+    again = _g1_examples({"k": 2, "negatives": "random"}, seed=7)
+    other = _g1_examples({"k": 2, "negatives": "random"}, seed=8)
+    assert first == again
+    assert first != other
+    for _, text_pos, text_neg, _, _ in first:
+        assert text_neg.startswith("b:")
+    a1 = [e for e in first if e[0] == "a:1"]
+    assert len(a1) == 2
+    assert {e[2] for e in a1}.isdisjoint({"b:1", "b:2"})  # never one of a:1's positives
+    assert a1[0][2] != a1[1][2]
+
+
+def test_rank_topk_mutual_positives_drop_one_sided_neighbors():
+    # a:1's top-1 is b:1, but b:1's own top-1 anchor is a:2 (0.95 > 0.9): not mutual, so a:1 is dropped.
+    # a:2's top-1 is b:1 and b:1's top-1 anchor is a:2: kept.
+    rows = [[0.9, 0.1, 0.1, 0.1, 0.1, 0.1], [0.95, 0.2, 0.2, 0.2, 0.2, 0.2]]
+    plain = _g1_examples({"k": 1}, rows)
+    mutual = _g1_examples({"k": 1, "positives": "mutual"}, rows)
+    assert {e[0] for e in plain} == {"a:1", "a:2"}
+    assert {e[0] for e in mutual} == {"a:2"}
+    assert [e for e in mutual if e[0] == "a:2"] == [e for e in plain if e[0] == "a:2"]
+
+
+def test_rank_topk_mutual_positives_apply_to_the_graph_view():
+    # The text view is mutual for both anchors (a:1 <-> b:1, a:2 <-> b:2); only the graph view differs.
+    text, graph_g1, graph_g2 = _wide_views([[0.9, 0.1, 0.1, 0.1, 0.1, 0.1], [0.1, 0.9, 0.1, 0.1, 0.1, 0.1]])
+    graph_g1 = SimilarityMatrix(
+        row_ids=graph_g1.row_ids,
+        col_ids=graph_g1.col_ids,
+        values=np.array([[1.0, 0.3, 0.8], [0.3, 1.0, 0.2], [0.8, 0.2, 1.0]], dtype=np.float32),
+    )
+    kwargs = dict(text_g1_g2=text, graph_g1=graph_g1, graph_g2=graph_g2, seed=0)
+    plain = rank_topk_sampler(config={"k": 1}, **kwargs)
+    mutual = rank_topk_sampler(config={"k": 1, "positives": "mutual"}, **kwargs)
+    # a:1 -> graph positive a:3 (0.8), and a:3's top-1 is a:1 (0.8): mutual, kept.
+    # a:2 -> graph positive a:1 (0.3), but a:1's top-1 is a:3: not mutual, dropped.
+    assert {e[0] for e in plain if e[0] in ("a:1", "a:2")} == {"a:1", "a:2"}
+    assert {e[0] for e in mutual if e[0] in ("a:1", "a:2")} == {"a:1"}
+
+
+def test_rank_topk_unknown_options_are_rejected():
+    with pytest.raises(ConfigError, match="negatives"):
+        _g1_examples({"k": 2, "negatives": "nearest"})
+    with pytest.raises(ConfigError, match="positives"):
+        _g1_examples({"k": 2, "positives": "all"})

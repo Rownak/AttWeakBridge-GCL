@@ -12,7 +12,7 @@ import pytest
 
 import cga.pipelines  # noqa: F401  (registers pipelines)
 from cga.core.artifacts import write_latest
-from cga.core.errors import ArtifactValidationError
+from cga.core.errors import ArtifactValidationError, ConfigError
 from cga.core.io import read_json
 from cga.core.registry import pipelines
 from cga.core.run import RunContext
@@ -96,7 +96,11 @@ def _build_config(tmp_path: Path, *, epochs: int = 2) -> dict:
 
 
 def _setup_training_data_run(
-    config: dict, *, example_tuples: list[tuple[str, str, str, str, str]], node_ids: list[str] | None = None
+    config: dict,
+    *,
+    example_tuples: list[tuple[str, str, str, str, str]],
+    node_ids: list[str] | None = None,
+    summary: dict | None = None,
 ) -> Path:
     node_ids = node_ids or ALL_IDS
     dataset_id = config["dataset"]["id"]
@@ -138,7 +142,7 @@ def _setup_training_data_run(
             {"name": "graph_embeddings", "pipeline": "deepwalk-fake", "run_id": graph_run_id, "path": str(graph_dir)},
         ],
         "outputs": [],
-        "summary": {},
+        "summary": summary or {},
     }
     import json
 
@@ -412,3 +416,83 @@ def test_gat_adapter_infonce_full_run_end_to_end(tmp_path, residual_floor, width
 def test_gat_adapter_with_edge_rewire_runs(tmp_path):
     ctx = _run_gcl_train(_gcn_adapter_config(tmp_path, residual_floor=True, rewire=True, adapter="gat"))
     assert AlignedMatrix.load(ctx.run_dir / "node_embeddings").vectors.shape == (len(ALL_IDS), 6 + 8)
+
+
+_ONE_EXAMPLE = [("attack:1", "cwe:1", "cwe:2", "attack:2", "attack:3")]
+_UNSUP_TD_SUMMARY = {"protocol": "unsupervised", "held_out_policy": "none", "n_pseudo_pairs": 7}
+
+
+def _unsup_config(tmp_path: Path, *, epochs: int = 3) -> dict:
+    config = _build_config(tmp_path, epochs=epochs)
+    config["protocol"] = "unsupervised"
+    return config
+
+
+@pytest.mark.parametrize("adapter_loss", ["triplet", "infonce"])
+def test_residual_adapter_mlp_trains_with_row_losses(tmp_path, adapter_loss):
+    # Sprint 5 trained the adapter with infonce_full only; the unsupervised U1 row uses the row losses.
+    config = _unsup_config(tmp_path, epochs=4)
+    config["gcl_train"]["model"] = {
+        "encoder": "residual_adapter",
+        "adapter": "mlp",
+        "lambda": 0.25,
+        "adapter_dim": 8,
+        "adapter_dropout": 0.2,
+        "model_id": f"u1-{adapter_loss}-test",
+    }
+    config["gcl_train"]["loss"] = {"name": adapter_loss, "margin": 1.0, "alpha": 1.0, "temperature": 0.1}
+    _setup_training_data_run(config, example_tuples=_ONE_EXAMPLE, summary=_UNSUP_TD_SUMMARY)
+
+    ctx = _run_gcl_train(config)
+
+    matrix = AlignedMatrix.load(ctx.run_dir / "node_embeddings")
+    assert matrix.vectors.shape == (len(ALL_IDS), 6 + 8)
+    assert np.isfinite(matrix.vectors).all()
+    import json
+
+    losses = [json.loads(line)["loss"] for line in (ctx.run_dir / "metrics.jsonl").read_text().splitlines()]
+    assert len(losses) == 4 and np.isfinite(losses).all()
+    assert read_json(ctx.run_dir / "manifest.json")["summary"]["n_trainable_params"] > 0
+
+
+def test_unsupervised_run_records_protocol_policy_and_pseudo_pairs(tmp_path):
+    config = _unsup_config(tmp_path)
+    _setup_training_data_run(config, example_tuples=_ONE_EXAMPLE, summary=_UNSUP_TD_SUMMARY)
+
+    summary = read_json(_run_gcl_train(config).run_dir / "manifest.json")["summary"]
+
+    assert summary["protocol"] == "unsupervised"
+    assert summary["held_out_policy"] == "none"
+    assert summary["n_pseudo_pairs"] == 7
+
+
+def test_unsupervised_guard_refuses_infonce_full(tmp_path):
+    config = _unsup_config(tmp_path)
+    config["gcl_train"]["loss"] = {"name": "infonce_full", "temperature": 0.05}
+    _setup_training_data_run(config, example_tuples=_ONE_EXAMPLE, summary=_UNSUP_TD_SUMMARY)
+    with pytest.raises(ConfigError, match="infonce_full"):
+        _run_gcl_train(config)
+
+
+def test_unsupervised_guard_refuses_monitor(tmp_path):
+    config = _unsup_config(tmp_path)
+    config["gcl_train"]["monitor"]["enabled"] = True
+    _setup_training_data_run(config, example_tuples=_ONE_EXAMPLE, summary=_UNSUP_TD_SUMMARY)
+    with pytest.raises(ConfigError, match="monitor"):
+        _run_gcl_train(config)
+
+
+@pytest.mark.parametrize("summary", [{}, {"held_out_policy": "legacy"}])
+def test_unsupervised_guard_refuses_a_training_data_run_that_held_out_gold_nodes(tmp_path, summary):
+    config = _unsup_config(tmp_path)
+    _setup_training_data_run(config, example_tuples=_ONE_EXAMPLE, summary=summary)
+    with pytest.raises(ConfigError, match="held_out_policy"):
+        _run_gcl_train(config)
+
+
+def test_supervised_protocol_is_unaffected_by_the_guard(tmp_path):
+    config = _build_config(tmp_path)
+    config["gcl_train"]["monitor"]["enabled"] = True  # accepted (and still unused) outside the unsupervised protocol
+    _setup_training_data_run(config, example_tuples=_ONE_EXAMPLE)
+    summary = read_json(_run_gcl_train(config).run_dir / "manifest.json")["summary"]
+    assert summary["protocol"] == "supervised"
