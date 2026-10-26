@@ -1,0 +1,13 @@
+# dev_docs/sweep_experiment_plan.md §1 -- percentile.{top_pct,bottom_pct} sweep, attack_cwe.
+# Run as: uv run cga sweep --spec configs/sweeps/percentile_pct.yaml
+#
+# top_pct/bottom_pct are paired (equal to each other) via zip:, not crossed --
+# they interact, so an independent 4x4 grid would waste 12 of 16 combinations
+# on asymmetric thresholds nobody asked to compare (plan §1).
+pipeline: training_data
+dataset: attack_cwe
+sweep:
+  training_data.sampler.name: [percentile]
+  zip: [training_data.sampler.top_pct, training_data.sampler.bottom_pct]
+  training_data.sampler.top_pct: [0.02, 0.05, 0.08, 0.1]
+  training_data.sampler.bottom_pct: [0.02, 0.05, 0.08, 0.1]

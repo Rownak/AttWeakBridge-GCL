@@ -1,0 +1,17 @@
+# Sprint 5 Phase 5.6 -- A15 (paper GAT branch, no SapBERT floor): epoch selection on val, seed 42. Run as:
+#   uv run cga run evaluate --dataset ncit_doid_srga --experiment ncit_doid_srga_gat_sel
+# gold_train is informational. No test split is read here.
+evaluate:
+  methods:
+    - {method_id: sapbert, label: "SapBERT (A0)", kind: embedding_store, embedder_id: hf_mean_pool-sapbert, ref: latest}
+    - {method_id: "gcn-full-e200-s42", label: "A12 seed 42", kind: gcl_run, model_id: "gcn-full-e200-s42", ref: latest}
+    - {method_id: "gat-full-e50-s42", label: "A15 ep=50", kind: gcl_run, model_id: "gat-full-e50-s42", ref: latest}
+    - {method_id: "gat-full-e100-s42", label: "A15 ep=100", kind: gcl_run, model_id: "gat-full-e100-s42", ref: latest}
+    - {method_id: "gat-full-e200-s42", label: "A15 ep=200", kind: gcl_run, model_id: "gat-full-e200-s42", ref: latest}
+  evaluations:
+    - evaluation_id: gold_val
+      kind: gold_alignment
+      params: {ks: [1, 5, 10], split: val, modes: [global]}
+    - evaluation_id: gold_train
+      kind: gold_alignment
+      params: {ks: [1, 5, 10], split: train, modes: [global]}

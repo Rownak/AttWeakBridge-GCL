@@ -1,0 +1,24 @@
+dataset:
+  id: attack_cwe
+  adapter: attack_cwe
+  root: ${paths.raw}/attack_cwe
+  graphs:
+    graph_1: {key: attack, display_name: "MITRE ATT&CK"}
+    graph_2: {key: cwe,    display_name: "MITRE CWE"}
+  adapter_config:
+    attack:
+      file: ics-attack.json
+      edge_from_relationships: true
+      include_types: null            # null = every object with an id
+    cwe:
+      file: cwec_v4.12.xml
+      version: cwec_v4.12
+      edge_relations: [ChildOf]
+  text_variants:
+    description:   {attack: [description],
+                    cwe: [name, description, extended_description]}
+    full_metadata: {attack: [description, detection],
+                    cwe: [name, description, extended_description, modes_of_introduction,
+                          common_consequences, detection_methods, potential_mitigations,
+                          demonstrative_examples]}
+  alignments: null                   # no ground truth available

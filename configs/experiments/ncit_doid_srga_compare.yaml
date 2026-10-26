@@ -1,0 +1,44 @@
+# Sprint 5 -- SRGA vs SapBERT on the ncit_doid_srga lineage. Run as:
+#   uv run cga run evaluate --dataset ncit_doid_srga --experiment ncit_doid_srga_compare
+#
+# gold_val (global only: val pairs have no candidate pool) is where every choice is made;
+# gold_test is read once per finished configuration (dev_docs/sprints/sprint_5.md, test discipline).
+# The 5.1 beta grid lives in ncit_doid_srga_grid.yaml (val only); only the val winner (lambda=0.25,
+# directional) and the lambda=0 floor check are added here.
+# Phase 5.4 (the sprint's one test readout): selected variant A3 (3 seeds, chosen on val after gate 5.3),
+# runner-up A1 (above), and A4 as a declared structural reference (not a selection candidate).
+# Phase 5.5 adds A11 (paper GCN branch beside SapBERT) and A12 (same branch, no SapBERT floor, 200 epochs),
+# 3 seeds each, read once after their val table was recorded.
+# Phase 5.6 adds A14 (paper GAT branch beside SapBERT) and A15 (same branch, no floor, 100 epochs), 3 seeds each,
+# likewise read once after their val table was recorded.
+evaluate:
+  methods:
+    - {method_id: sapbert,   label: "SapBERT (A0)",     kind: embedding_store, embedder_id: hf_mean_pool-sapbert,   ref: latest}
+    - {method_id: bert_base, label: "BERT-base (text)", kind: embedding_store, embedder_id: hf_mean_pool-bert_base, ref: latest}
+    - {method_id: srga-nb-l0,         label: "SRGA nb l=0 (floor)",      kind: gcl_run, model_id: srga-nb-l0,         ref: latest}
+    - {method_id: srga-nb-l0.25-dir,  label: "SRGA nb l=0.25 dir (A1)", kind: gcl_run, model_id: srga-nb-l0.25-dir,  ref: latest}
+    - {method_id: srga-mlp-l0.25-s42, label: "A3 MLP l=0.25 s42", kind: gcl_run, model_id: srga-mlp-l0.25-s42, ref: latest}
+    - {method_id: srga-mlp-l0.25-s43, label: "A3 MLP l=0.25 s43", kind: gcl_run, model_id: srga-mlp-l0.25-s43, ref: latest}
+    - {method_id: srga-mlp-l0.25-s44, label: "A3 MLP l=0.25 s44", kind: gcl_run, model_id: srga-mlp-l0.25-s44, ref: latest}
+    - {method_id: srga-rel-l0.25-s42, label: "A4 relational l=0.25 s42", kind: gcl_run, model_id: srga-rel-l0.25-s42, ref: latest}
+    - {method_id: srga-rel-l0.25-s43, label: "A4 relational l=0.25 s43", kind: gcl_run, model_id: srga-rel-l0.25-s43, ref: latest}
+    - {method_id: srga-rel-l0.25-s44, label: "A4 relational l=0.25 s44", kind: gcl_run, model_id: srga-rel-l0.25-s44, ref: latest}
+    - {method_id: srga-gcn-l0.25-s42, label: "A11 GCN l=0.25 s42", kind: gcl_run, model_id: srga-gcn-l0.25-s42, ref: latest}
+    - {method_id: srga-gcn-l0.25-s43, label: "A11 GCN l=0.25 s43", kind: gcl_run, model_id: srga-gcn-l0.25-s43, ref: latest}
+    - {method_id: srga-gcn-l0.25-s44, label: "A11 GCN l=0.25 s44", kind: gcl_run, model_id: srga-gcn-l0.25-s44, ref: latest}
+    - {method_id: gcn-full-e200-s42, label: "A12 GCN no-floor s42", kind: gcl_run, model_id: gcn-full-e200-s42, ref: latest}
+    - {method_id: gcn-full-e200-s43, label: "A12 GCN no-floor s43", kind: gcl_run, model_id: gcn-full-e200-s43, ref: latest}
+    - {method_id: gcn-full-e200-s44, label: "A12 GCN no-floor s44", kind: gcl_run, model_id: gcn-full-e200-s44, ref: latest}
+    - {method_id: srga-gat-l0.25-s42, label: "A14 GAT l=0.25 s42", kind: gcl_run, model_id: srga-gat-l0.25-s42, ref: latest}
+    - {method_id: srga-gat-l0.25-s43, label: "A14 GAT l=0.25 s43", kind: gcl_run, model_id: srga-gat-l0.25-s43, ref: latest}
+    - {method_id: srga-gat-l0.25-s44, label: "A14 GAT l=0.25 s44", kind: gcl_run, model_id: srga-gat-l0.25-s44, ref: latest}
+    - {method_id: gat-full-e100-s42, label: "A15 GAT no-floor s42", kind: gcl_run, model_id: gat-full-e100-s42, ref: latest}
+    - {method_id: gat-full-e100-s43, label: "A15 GAT no-floor s43", kind: gcl_run, model_id: gat-full-e100-s43, ref: latest}
+    - {method_id: gat-full-e100-s44, label: "A15 GAT no-floor s44", kind: gcl_run, model_id: gat-full-e100-s44, ref: latest}
+  evaluations:
+    - evaluation_id: gold_val
+      kind: gold_alignment
+      params: {ks: [1, 5, 10], split: val, modes: [global]}
+    - evaluation_id: gold_test
+      kind: gold_alignment
+      params: {ks: [1, 5, 10], split: test, modes: [global, candidates]}

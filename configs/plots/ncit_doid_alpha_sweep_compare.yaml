@@ -1,0 +1,15 @@
+# Sprint 3 Phase 3.4 -- figures for ncit_doid_alpha_sweep_compare, run as:
+#   cga run plot --dataset ncit_doid --config configs/plots/ncit_doid_alpha_sweep_compare.yaml
+plot:
+  figures:
+    - {figure_id: precision_at_k, kind: line,
+       select: {evaluation_id: neigh, metric_name: normalized_precision_at_k},
+       x: param_value, hue: method_label, facet: [view_id, graph_role]}
+    - {figure_id: mrr, kind: line,
+       select: {evaluation_id: neigh, metric_name: mrr},
+       x: param_value, hue: method_label, facet: [view_id, graph_role]}
+    - {figure_id: silhouette, kind: line,
+       select: {evaluation_id: clusters, metric_name: silhouette},
+       x: param_value, hue: method_label, facet: [graph_role]}
+  loss_curves:
+    enabled: true

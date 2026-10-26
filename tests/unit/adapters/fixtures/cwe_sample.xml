@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Weakness_Catalog xmlns="http://cwe.mitre.org/cwe-7" xmlns:xhtml="http://www.w3.org/1999/xhtml" Name="CWE" Version="4.12" Date="2023-06-29">
+  <Weaknesses>
+    <Weakness ID="1" Name="Base Weakness" Abstraction="Base" Structure="Simple" Status="Draft">
+      <Description>Base weakness description.</Description>
+      <Extended_Description>
+        <xhtml:p>Extended paragraph one.</xhtml:p>
+        <xhtml:p>Extended paragraph two.</xhtml:p>
+      </Extended_Description>
+    </Weakness>
+    <Weakness ID="79" Name="Improper Neutralization" Abstraction="Base" Structure="Simple" Status="Draft">
+      <Description>Weakness 79 description.</Description>
+      <Extended_Description>Weakness 79 extended description.</Extended_Description>
+      <Related_Weaknesses>
+        <Related_Weakness Nature="ChildOf" CWE_ID="1" View_ID="1000" Ordinal="Primary"/>
+        <Related_Weakness Nature="PeerOf" CWE_ID="200" View_ID="1000" Ordinal="Primary"/>
+      </Related_Weaknesses>
+    </Weakness>
+    <Weakness ID="80" Name="No Description Weakness" Abstraction="Base" Structure="Simple" Status="Draft">
+      <Related_Weaknesses>
+        <Related_Weakness Nature="ChildOf" CWE_ID="1" View_ID="1000" Ordinal="Primary"/>
+      </Related_Weaknesses>
+    </Weakness>
+  </Weaknesses>
+</Weakness_Catalog>

@@ -1,0 +1,2 @@
+SrcEntity	TgtEntity	TgtCandidates
+http://ncicb.nci.nih.gov/xml/owl/EVS/Thesaurus.owl#C3224	http://purl.obolibrary.org/obo/DOID_4362	('http://purl.obolibrary.org/obo/DOID_120', 'http://purl.obolibrary.org/obo/DOID_9999')

@@ -1,0 +1,16 @@
+# Sprint 9 U1 (dev_docs/sprints/sprint_9.md): frozen BERT + trained residual MLP projection on top-k text pseudo-pairs, triplet loss.
+# Fixed settings, never tuned. Per seed S (the model id carries it so LATEST pointers never collide):
+#   uv run cga run training_data --dataset <ds> --experiment unsup_u1 --set seed=S
+#   uv run cga run gcl_train     --dataset <ds> --experiment unsup_u1 --set seed=S --set gcl_train.model.model_id=u1-sS
+training_data:
+  held_out_policy: none
+  inputs:
+    text_embeddings:  {embedder_id: hf_mean_pool-bert_base, run: latest}
+    graph_embeddings: {embedder_id: deepwalk-deepwalk, run: latest}
+  sampler: {name: rank_topk, k: 5}
+gcl_train:
+  inputs: {training_data_sampler_id: rank_topk-k5}
+  model: {encoder: residual_adapter, adapter: mlp, lambda: 0.25}
+  loss: {name: triplet, margin: 1.0, alpha: 1.0}
+  optim: {name: adam, lr: 1.0e-3, weight_decay: 0.0}
+  train: {epochs: 100}

@@ -1,0 +1,15 @@
+# Sprint 9 U2 (dev_docs/sprints/sprint_9.md): BERT + DeepWalk GCN dual encoder (the current method) on top-k pseudo-pairs, triplet loss.
+# Same fixed settings and per-seed commands as unsup_u1.yaml, with `unsup_u2` and model ids `u2-sS`. Sampler variants (Phase 9.2) override
+#   training_data.sampler.negatives=random|hard and training_data.sampler.positives=mutual with --set, and the loss with gcl_train.loss.name.
+training_data:
+  held_out_policy: none
+  inputs:
+    text_embeddings:  {embedder_id: hf_mean_pool-bert_base, run: latest}
+    graph_embeddings: {embedder_id: deepwalk-deepwalk, run: latest}
+  sampler: {name: rank_topk, k: 5}
+gcl_train:
+  inputs: {training_data_sampler_id: rank_topk-k5}
+  model: {encoder: gcn, hidden_dim: 128, out_dim: 128, dropout: 0.0}
+  loss: {name: triplet, margin: 1.0, alpha: 0.5}
+  optim: {name: adam, lr: 1.0e-3, weight_decay: 0.0}
+  train: {epochs: 100}

@@ -1,0 +1,12 @@
+# target_architecture.md §7.9 -- thin defaults only; a named evaluation is an
+# experiment overlay (§7.11), since deep_merge replaces lists wholesale and an
+# overlay's `methods`/`evaluations` fully replace these.
+evaluate:
+  inputs:
+    ingest_run: latest              # canonical tables + graph
+  methods: []                       # [{method_id, label, kind, embedder_id|model_id, ref}]
+  evaluations: []                   # [{evaluation_id, kind, params}] -- params opaque to the pipeline
+  visualize:
+    enabled: false                  # optional t-SNE per method; never a reported metric
+    perplexity: 25.0
+    methods: []                     # empty = every configured method

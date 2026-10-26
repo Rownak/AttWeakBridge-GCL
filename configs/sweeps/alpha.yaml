@@ -1,0 +1,32 @@
+# dev_docs/sweep_experiment_plan.md -- gcl_train.loss.alpha sweep, attack_cwe.
+# Run as: uv run cga sweep --spec configs/sweeps/alpha.yaml
+#
+# Sequential to Phase 2.1: the sampler is held fixed at that phase's winner
+# (rank_topk, k=5) instead of the pipeline config's default (rank_topk-k30),
+# so this sweep isolates alpha's effect. alpha=0.0 is graph-loss-only and
+# alpha=1.0 is text-loss-only -- both ends are ablations, not just grid edges.
+#
+# model_id is zipped against alpha (not left at build_model_id's bare-encoder
+# default) so each of the 5 points keeps its own
+# models/gcl/attack_cwe/{model_id}/LATEST instead of all 5 clobbering
+# models/gcl/attack_cwe/gcn/LATEST -- the same collision sampler_id fixed for
+# training_data in Phase 2.1 (dev_docs/sprints/sprint_2.md Phase 2.2).
+#
+# model_id values spell out alpha the way expand_sweep's _short_value would
+# render the float (`%g`: 0.0 -> "0", 1.0 -> "1"), so the id this spec
+# declares always matches the sweep_point_id cga sweep prints and the
+# manifest records -- required for configs/experiments/alpha_sweep_compare.yaml
+# to resolve each method's `ref: latest` correctly.
+#
+# training_data_sampler_id/epochs are pinned via `fixed:` rather than `sweep:`
+# so they don't lengthen sweep_point_id with values that never vary across
+# this grid (core/sweep.py's fixed: block, added for this phase).
+pipeline: gcl_train
+dataset: attack_cwe
+fixed:
+  gcl_train.inputs.training_data_sampler_id: rank_topk-k5
+  gcl_train.train.epochs: 100
+sweep:
+  zip: [gcl_train.loss.alpha, gcl_train.model.model_id]
+  gcl_train.loss.alpha: [0.0, 0.25, 0.5, 0.75, 1.0]
+  gcl_train.model.model_id: [gcn-alpha0, gcn-alpha0.25, gcn-alpha0.5, gcn-alpha0.75, gcn-alpha1]

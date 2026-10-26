@@ -1,0 +1,20 @@
+# Sprint 5 Phase 5.2 -- A3 (trainable MLP adapter, no edges) selection grid on val, seed 42. Run as:
+#   uv run cga run evaluate --dataset ncit_doid_srga --experiment ncit_doid_srga_mlp_sel
+# gold_train (informational) checks the under-fitting fix; no test split is read in this phase.
+evaluate:
+  methods:
+    - {method_id: sapbert, label: "SapBERT (A0)", kind: embedding_store, embedder_id: hf_mean_pool-sapbert, ref: latest}
+    - {method_id: "srga-nb-l0.25-dir", label: "A1 nb l=0.25 dir", kind: gcl_run, model_id: "srga-nb-l0.25-dir", ref: latest}
+    - {method_id: "srga-mlp-sel-t0.05-e50", label: "A3 tau=0.05 ep=50", kind: gcl_run, model_id: "srga-mlp-sel-t0.05-e50", ref: latest}
+    - {method_id: "srga-mlp-sel-t0.05-e100", label: "A3 tau=0.05 ep=100", kind: gcl_run, model_id: "srga-mlp-sel-t0.05-e100", ref: latest}
+    - {method_id: "srga-mlp-sel-t0.05-e200", label: "A3 tau=0.05 ep=200", kind: gcl_run, model_id: "srga-mlp-sel-t0.05-e200", ref: latest}
+    - {method_id: "srga-mlp-sel-t0.1-e50", label: "A3 tau=0.1 ep=50", kind: gcl_run, model_id: "srga-mlp-sel-t0.1-e50", ref: latest}
+    - {method_id: "srga-mlp-sel-t0.1-e100", label: "A3 tau=0.1 ep=100", kind: gcl_run, model_id: "srga-mlp-sel-t0.1-e100", ref: latest}
+    - {method_id: "srga-mlp-sel-t0.1-e200", label: "A3 tau=0.1 ep=200", kind: gcl_run, model_id: "srga-mlp-sel-t0.1-e200", ref: latest}
+  evaluations:
+    - evaluation_id: gold_val
+      kind: gold_alignment
+      params: {ks: [1, 5, 10], split: val, modes: [global]}
+    - evaluation_id: gold_train
+      kind: gold_alignment
+      params: {ks: [1, 5, 10], split: train, modes: [global]}

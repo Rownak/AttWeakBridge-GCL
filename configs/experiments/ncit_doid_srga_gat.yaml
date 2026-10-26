@@ -1,0 +1,31 @@
+# Sprint 5 Phase 5.6 -- A14 (paper GAT branch beside SapBERT), A15 (no SapBERT floor, 100 epochs), A16 (A14 on a rewired graph),
+# 3 seeds each, with A0, A3, A11 and A12 as references. Val plus train (informational); no test read. Run as:
+#   uv run cga run evaluate --dataset ncit_doid_srga --experiment ncit_doid_srga_gat
+evaluate:
+  methods:
+    - {method_id: sapbert, label: "SapBERT (A0)", kind: embedding_store, embedder_id: hf_mean_pool-sapbert, ref: latest}
+    - {method_id: "srga-mlp-l0.25-s42", label: "A3 seed 42", kind: gcl_run, model_id: "srga-mlp-l0.25-s42", ref: latest}
+    - {method_id: "srga-mlp-l0.25-s43", label: "A3 seed 43", kind: gcl_run, model_id: "srga-mlp-l0.25-s43", ref: latest}
+    - {method_id: "srga-mlp-l0.25-s44", label: "A3 seed 44", kind: gcl_run, model_id: "srga-mlp-l0.25-s44", ref: latest}
+    - {method_id: "srga-gcn-l0.25-s42", label: "A11 seed 42", kind: gcl_run, model_id: "srga-gcn-l0.25-s42", ref: latest}
+    - {method_id: "srga-gcn-l0.25-s43", label: "A11 seed 43", kind: gcl_run, model_id: "srga-gcn-l0.25-s43", ref: latest}
+    - {method_id: "srga-gcn-l0.25-s44", label: "A11 seed 44", kind: gcl_run, model_id: "srga-gcn-l0.25-s44", ref: latest}
+    - {method_id: "gcn-full-e200-s42", label: "A12 seed 42", kind: gcl_run, model_id: "gcn-full-e200-s42", ref: latest}
+    - {method_id: "gcn-full-e200-s43", label: "A12 seed 43", kind: gcl_run, model_id: "gcn-full-e200-s43", ref: latest}
+    - {method_id: "gcn-full-e200-s44", label: "A12 seed 44", kind: gcl_run, model_id: "gcn-full-e200-s44", ref: latest}
+    - {method_id: "srga-gat-l0.25-s42", label: "A14 seed 42", kind: gcl_run, model_id: "srga-gat-l0.25-s42", ref: latest}
+    - {method_id: "srga-gat-l0.25-s43", label: "A14 seed 43", kind: gcl_run, model_id: "srga-gat-l0.25-s43", ref: latest}
+    - {method_id: "srga-gat-l0.25-s44", label: "A14 seed 44", kind: gcl_run, model_id: "srga-gat-l0.25-s44", ref: latest}
+    - {method_id: "gat-full-e100-s42", label: "A15 seed 42", kind: gcl_run, model_id: "gat-full-e100-s42", ref: latest}
+    - {method_id: "gat-full-e100-s43", label: "A15 seed 43", kind: gcl_run, model_id: "gat-full-e100-s43", ref: latest}
+    - {method_id: "gat-full-e100-s44", label: "A15 seed 44", kind: gcl_run, model_id: "gat-full-e100-s44", ref: latest}
+    - {method_id: "srga-gat-rewired-l0.25-s42", label: "A16 seed 42", kind: gcl_run, model_id: "srga-gat-rewired-l0.25-s42", ref: latest}
+    - {method_id: "srga-gat-rewired-l0.25-s43", label: "A16 seed 43", kind: gcl_run, model_id: "srga-gat-rewired-l0.25-s43", ref: latest}
+    - {method_id: "srga-gat-rewired-l0.25-s44", label: "A16 seed 44", kind: gcl_run, model_id: "srga-gat-rewired-l0.25-s44", ref: latest}
+  evaluations:
+    - evaluation_id: gold_val
+      kind: gold_alignment
+      params: {ks: [1, 5, 10], split: val, modes: [global]}
+    - evaluation_id: gold_train
+      kind: gold_alignment
+      params: {ks: [1, 5, 10], split: train, modes: [global]}

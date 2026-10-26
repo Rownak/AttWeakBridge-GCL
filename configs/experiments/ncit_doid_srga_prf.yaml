@@ -1,0 +1,70 @@
+# Sprint 8 Phase 8.2 -- BioGITOM-style P/R/F1 on VAL (211 pairs), train-only lineage; filters on/off x greedy_one_to_one/top1.
+#   uv run cga run evaluate --dataset ncit_doid_srga --experiment ncit_doid_srga_prf
+# A0, A1, A3, A4, A11, A12, A14, A15 (3 seeds where seeded), seed ensembles A17/A18, fusion A19 (w=0.5), grand ensemble A20.
+evaluate:
+  methods:
+    - {method_id: sapbert, label: "SapBERT (A0)", kind: embedding_store, embedder_id: hf_mean_pool-sapbert, ref: latest}
+    - {method_id: "srga-nb-l0.25-dir", label: "A1 nb l=0.25 dir", kind: gcl_run, model_id: "srga-nb-l0.25-dir", ref: latest}
+    - {method_id: "srga-mlp-l0.25-s42", label: "A3 MLP seed 42", kind: gcl_run, model_id: "srga-mlp-l0.25-s42", ref: latest}
+    - {method_id: "srga-mlp-l0.25-s43", label: "A3 MLP seed 43", kind: gcl_run, model_id: "srga-mlp-l0.25-s43", ref: latest}
+    - {method_id: "srga-mlp-l0.25-s44", label: "A3 MLP seed 44", kind: gcl_run, model_id: "srga-mlp-l0.25-s44", ref: latest}
+    - {method_id: "srga-rel-l0.25-s42", label: "A4 relational seed 42", kind: gcl_run, model_id: "srga-rel-l0.25-s42", ref: latest}
+    - {method_id: "srga-rel-l0.25-s43", label: "A4 relational seed 43", kind: gcl_run, model_id: "srga-rel-l0.25-s43", ref: latest}
+    - {method_id: "srga-rel-l0.25-s44", label: "A4 relational seed 44", kind: gcl_run, model_id: "srga-rel-l0.25-s44", ref: latest}
+    - {method_id: "srga-gcn-l0.25-s42", label: "A11 GCN seed 42", kind: gcl_run, model_id: "srga-gcn-l0.25-s42", ref: latest}
+    - {method_id: "srga-gcn-l0.25-s43", label: "A11 GCN seed 43", kind: gcl_run, model_id: "srga-gcn-l0.25-s43", ref: latest}
+    - {method_id: "srga-gcn-l0.25-s44", label: "A11 GCN seed 44", kind: gcl_run, model_id: "srga-gcn-l0.25-s44", ref: latest}
+    - {method_id: "gcn-full-e200-s42", label: "A12 GCN no-floor seed 42", kind: gcl_run, model_id: "gcn-full-e200-s42", ref: latest}
+    - {method_id: "gcn-full-e200-s43", label: "A12 GCN no-floor seed 43", kind: gcl_run, model_id: "gcn-full-e200-s43", ref: latest}
+    - {method_id: "gcn-full-e200-s44", label: "A12 GCN no-floor seed 44", kind: gcl_run, model_id: "gcn-full-e200-s44", ref: latest}
+    - {method_id: "srga-gat-l0.25-s42", label: "A14 GAT seed 42", kind: gcl_run, model_id: "srga-gat-l0.25-s42", ref: latest}
+    - {method_id: "srga-gat-l0.25-s43", label: "A14 GAT seed 43", kind: gcl_run, model_id: "srga-gat-l0.25-s43", ref: latest}
+    - {method_id: "srga-gat-l0.25-s44", label: "A14 GAT seed 44", kind: gcl_run, model_id: "srga-gat-l0.25-s44", ref: latest}
+    - {method_id: "gat-full-e100-s42", label: "A15 GAT no-floor seed 42", kind: gcl_run, model_id: "gat-full-e100-s42", ref: latest}
+    - {method_id: "gat-full-e100-s43", label: "A15 GAT no-floor seed 43", kind: gcl_run, model_id: "gat-full-e100-s43", ref: latest}
+    - {method_id: "gat-full-e100-s44", label: "A15 GAT no-floor seed 44", kind: gcl_run, model_id: "gat-full-e100-s44", ref: latest}
+    - method_id: "A17"
+      label: "A17 seed ensemble of A11"
+      kind: fusion
+      members:
+        - {kind: gcl_run, model_id: "srga-gcn-l0.25-s42", ref: latest, weight: 1}
+        - {kind: gcl_run, model_id: "srga-gcn-l0.25-s43", ref: latest, weight: 1}
+        - {kind: gcl_run, model_id: "srga-gcn-l0.25-s44", ref: latest, weight: 1}
+    - method_id: "A18"
+      label: "A18 seed ensemble of A12"
+      kind: fusion
+      members:
+        - {kind: gcl_run, model_id: "gcn-full-e200-s42", ref: latest, weight: 1}
+        - {kind: gcl_run, model_id: "gcn-full-e200-s43", ref: latest, weight: 1}
+        - {kind: gcl_run, model_id: "gcn-full-e200-s44", ref: latest, weight: 1}
+    - method_id: "A19"
+      label: "A19 = 0.5 A18 + 0.5 A17"
+      kind: fusion
+      members:
+        - {kind: gcl_run, model_id: "gcn-full-e200-s42", ref: latest, weight: 0.5}
+        - {kind: gcl_run, model_id: "gcn-full-e200-s43", ref: latest, weight: 0.5}
+        - {kind: gcl_run, model_id: "gcn-full-e200-s44", ref: latest, weight: 0.5}
+        - {kind: gcl_run, model_id: "srga-gcn-l0.25-s42", ref: latest, weight: 0.5}
+        - {kind: gcl_run, model_id: "srga-gcn-l0.25-s43", ref: latest, weight: 0.5}
+        - {kind: gcl_run, model_id: "srga-gcn-l0.25-s44", ref: latest, weight: 0.5}
+    - method_id: "A20"
+      label: "A20 grand ensemble (A11+A12+A14+A15)"
+      kind: fusion
+      members:
+        - {kind: gcl_run, model_id: "srga-gcn-l0.25-s42", ref: latest, weight: 1}
+        - {kind: gcl_run, model_id: "srga-gcn-l0.25-s43", ref: latest, weight: 1}
+        - {kind: gcl_run, model_id: "srga-gcn-l0.25-s44", ref: latest, weight: 1}
+        - {kind: gcl_run, model_id: "gcn-full-e200-s42", ref: latest, weight: 1}
+        - {kind: gcl_run, model_id: "gcn-full-e200-s43", ref: latest, weight: 1}
+        - {kind: gcl_run, model_id: "gcn-full-e200-s44", ref: latest, weight: 1}
+        - {kind: gcl_run, model_id: "srga-gat-l0.25-s42", ref: latest, weight: 1}
+        - {kind: gcl_run, model_id: "srga-gat-l0.25-s43", ref: latest, weight: 1}
+        - {kind: gcl_run, model_id: "srga-gat-l0.25-s44", ref: latest, weight: 1}
+        - {kind: gcl_run, model_id: "gat-full-e100-s42", ref: latest, weight: 1}
+        - {kind: gcl_run, model_id: "gat-full-e100-s43", ref: latest, weight: 1}
+        - {kind: gcl_run, model_id: "gat-full-e100-s44", ref: latest, weight: 1}
+  evaluations:
+    - {evaluation_id: prf_val_greedy_nofilt, kind: gold_alignment_prf, params: {split: val, assignment: greedy_one_to_one, biogitom_filters: false}}
+    - {evaluation_id: prf_val_top1_nofilt, kind: gold_alignment_prf, params: {split: val, assignment: top1, biogitom_filters: false}}
+    - {evaluation_id: prf_val_greedy_filt, kind: gold_alignment_prf, params: {split: val, assignment: greedy_one_to_one, biogitom_filters: true}}
+    - {evaluation_id: prf_val_top1_filt, kind: gold_alignment_prf, params: {split: val, assignment: top1, biogitom_filters: true}}

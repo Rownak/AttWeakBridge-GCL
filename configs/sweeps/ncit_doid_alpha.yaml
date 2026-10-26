@@ -1,0 +1,16 @@
+# Sprint 3 Phase 3.4 -- gcl_train.loss.alpha sweep, ncit_doid (repeat of Phase 2.2).
+# Run as: uv run cga sweep --spec configs/sweeps/ncit_doid_alpha.yaml
+#
+# The sampler is held at the Phase 3.3 winner (rank_topk, k=5). alpha=0.0 is graph-loss-only and
+# alpha=1.0 is text-loss-only, so both ends are ablations. model_id is zipped against alpha so
+# each point keeps its own models/gcl/ncit_doid/{model_id}/LATEST; the values spell alpha the way
+# expand_sweep renders floats (%g: 0.0 -> "0", 1.0 -> "1").
+pipeline: gcl_train
+dataset: ncit_doid
+fixed:
+  gcl_train.inputs.training_data_sampler_id: rank_topk-k5
+  gcl_train.train.epochs: 100
+sweep:
+  zip: [gcl_train.loss.alpha, gcl_train.model.model_id]
+  gcl_train.loss.alpha: [0.0, 0.25, 0.5, 0.75, 1.0]
+  gcl_train.model.model_id: [gcn-alpha0, gcn-alpha0.25, gcn-alpha0.5, gcn-alpha0.75, gcn-alpha1]

@@ -1,0 +1,29 @@
+# Sprint 9: unsupervised ablations on ATT&CK-CWE. Identical to attack_cwe (no ground truth: `alignments: null`), so every output is
+# gold-free (`neighborhood` evaluation only); a gold set can be added later by filling `alignments` here.
+# Ingest with an all-train node split so every node is an anchor and a candidate:
+#   uv run cga run ingest --dataset attack_cwe_unsup --set "ingest.split.fractions=[1.0,0.0,0.0]"
+protocol: unsupervised
+dataset:
+  id: attack_cwe_unsup
+  adapter: attack_cwe
+  root: ${paths.raw}/attack_cwe
+  graphs:
+    graph_1: {key: attack, display_name: "MITRE ATT&CK"}
+    graph_2: {key: cwe,    display_name: "MITRE CWE"}
+  adapter_config:
+    attack:
+      file: ics-attack.json
+      edge_from_relationships: true
+      include_types: null            # null = every object with an id
+    cwe:
+      file: cwec_v4.12.xml
+      version: cwec_v4.12
+      edge_relations: [ChildOf]
+  text_variants:
+    description:   {attack: [description],
+                    cwe: [name, description, extended_description]}
+    full_metadata: {attack: [description, detection],
+                    cwe: [name, description, extended_description, modes_of_introduction,
+                          common_consequences, detection_methods, potential_mitigations,
+                          demonstrative_examples]}
+  alignments: null                   # no ground truth available

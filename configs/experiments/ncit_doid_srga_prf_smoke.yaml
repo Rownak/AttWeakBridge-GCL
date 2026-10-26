@@ -1,0 +1,11 @@
+# Sprint 8 Phase 8.1 -- smoke run of the BioGITOM-style P/R/F1 evaluator, val only, A0 (SapBERT) only.
+#   uv run cga run evaluate --dataset ncit_doid_srga --experiment ncit_doid_srga_prf_smoke
+# Checks: n_gold = 211, and unfiltered top1 F1 ~ the Sprint 5 A0 val Hits@1 (0.2938).
+evaluate:
+  methods:
+    - {method_id: sapbert, label: "SapBERT (A0)", kind: embedding_store, embedder_id: hf_mean_pool-sapbert, ref: latest}
+  evaluations:
+    - {evaluation_id: prf_val_top1,         kind: gold_alignment_prf, params: {split: val, assignment: top1}}
+    - {evaluation_id: prf_val_top1_filt,    kind: gold_alignment_prf, params: {split: val, assignment: top1, biogitom_filters: true}}
+    - {evaluation_id: prf_val_greedy,       kind: gold_alignment_prf, params: {split: val, assignment: greedy_one_to_one}}
+    - {evaluation_id: prf_val_greedy_filt,  kind: gold_alignment_prf, params: {split: val, assignment: greedy_one_to_one, biogitom_filters: true}}

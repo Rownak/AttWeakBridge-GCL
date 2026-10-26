@@ -1,0 +1,10 @@
+# Sprint 4 Phase 4.4 -- figures for ncit_doid_gold_compare, run as:
+#   cga run plot --dataset ncit_doid_supervised --config configs/plots/ncit_doid_gold_compare.yaml
+plot:
+  figures:
+    - {figure_id: hits_at_k, kind: bar,
+       select: {evaluation_id: gold, metric_name: hits_at_k},
+       x: param_value, hue: method_label, facet: [view_id]}
+    - {figure_id: mrr, kind: bar,
+       select: {evaluation_id: gold, metric_name: mrr},
+       x: param_value, hue: method_label, facet: [view_id]}

@@ -1,0 +1,35 @@
+# Sprint 9 Phase 9.2 -- TEST readout (once) of the unsupervised ablation matrix on NCIT-DOID (3,280 gold test pairs). Rows and fixed
+# settings: dev_docs/sprints/sprint_9.md. Trained by scripts/run_unsup_matrix.sh; seeds 42 / 43 / 44. Ranking: global mode, sibling filter
+# restricted to the test split. Pair set: top-3 cosine, greedy one-to-one, threshold 0.0, no BioGITOM filters (they read gold train labels).
+#   uv run cga run evaluate --dataset ncit_doid_unsup --experiment ncit_doid_unsup_test
+evaluate:
+  methods:
+    - {method_id: u0, label: "BERT (frozen)", kind: embedding_store, embedder_id: hf_mean_pool-bert_base, ref: latest}
+    - {method_id: u1-s42, label: "U1 BERT + projection, triplet", kind: gcl_run, model_id: u1-s42, ref: latest}
+    - {method_id: u1-s43, label: "U1 BERT + projection, triplet", kind: gcl_run, model_id: u1-s43, ref: latest}
+    - {method_id: u1-s44, label: "U1 BERT + projection, triplet", kind: gcl_run, model_id: u1-s44, ref: latest}
+    - {method_id: u2-s42, label: "U2 BERT + GCN, triplet", kind: gcl_run, model_id: u2-s42, ref: latest}
+    - {method_id: u2-s43, label: "U2 BERT + GCN, triplet", kind: gcl_run, model_id: u2-s43, ref: latest}
+    - {method_id: u2-s44, label: "U2 BERT + GCN, triplet", kind: gcl_run, model_id: u2-s44, ref: latest}
+    - {method_id: u1-i-s42, label: "U1-I BERT + projection, InfoNCE", kind: gcl_run, model_id: u1-i-s42, ref: latest}
+    - {method_id: u1-i-s43, label: "U1-I BERT + projection, InfoNCE", kind: gcl_run, model_id: u1-i-s43, ref: latest}
+    - {method_id: u1-i-s44, label: "U1-I BERT + projection, InfoNCE", kind: gcl_run, model_id: u1-i-s44, ref: latest}
+    - {method_id: u2-i-s42, label: "U2-I BERT + GCN, InfoNCE", kind: gcl_run, model_id: u2-i-s42, ref: latest}
+    - {method_id: u2-i-s43, label: "U2-I BERT + GCN, InfoNCE", kind: gcl_run, model_id: u2-i-s43, ref: latest}
+    - {method_id: u2-i-s44, label: "U2-I BERT + GCN, InfoNCE", kind: gcl_run, model_id: u2-i-s44, ref: latest}
+    - {method_id: u2-rand-s42, label: "U2-rand BERT + GCN, random negatives", kind: gcl_run, model_id: u2-rand-s42, ref: latest}
+    - {method_id: u2-rand-s43, label: "U2-rand BERT + GCN, random negatives", kind: gcl_run, model_id: u2-rand-s43, ref: latest}
+    - {method_id: u2-rand-s44, label: "U2-rand BERT + GCN, random negatives", kind: gcl_run, model_id: u2-rand-s44, ref: latest}
+    - {method_id: u2-hard-s42, label: "U2-hard BERT + GCN, hard negatives", kind: gcl_run, model_id: u2-hard-s42, ref: latest}
+    - {method_id: u2-hard-s43, label: "U2-hard BERT + GCN, hard negatives", kind: gcl_run, model_id: u2-hard-s43, ref: latest}
+    - {method_id: u2-hard-s44, label: "U2-hard BERT + GCN, hard negatives", kind: gcl_run, model_id: u2-hard-s44, ref: latest}
+    - {method_id: u2-mut-s42, label: "U2-mut BERT + GCN, mutual top-k", kind: gcl_run, model_id: u2-mut-s42, ref: latest}
+    - {method_id: u2-mut-s43, label: "U2-mut BERT + GCN, mutual top-k", kind: gcl_run, model_id: u2-mut-s43, ref: latest}
+    - {method_id: u2-mut-s44, label: "U2-mut BERT + GCN, mutual top-k", kind: gcl_run, model_id: u2-mut-s44, ref: latest}
+  evaluations:
+    - evaluation_id: gold_test
+      kind: gold_alignment
+      params: {ks: [1, 5, 10], split: test, modes: [global], sibling_filter_splits: [test]}
+    - evaluation_id: prf_test
+      kind: gold_alignment_prf
+      params: {split: test, assignment: greedy_one_to_one, top_k: 3, threshold: 0.0, biogitom_filters: false}

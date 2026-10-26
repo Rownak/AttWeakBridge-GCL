@@ -1,0 +1,46 @@
+{
+  "type": "bundle",
+  "id": "bundle--test",
+  "spec_version": "2.1",
+  "objects": [
+    {
+      "type": "attack-pattern",
+      "id": "attack-pattern--aaaa",
+      "name": "Spoof Reporting Message",
+      "description": "Adversaries may spoof reporting messages.",
+      "x_mitre_detection": "Monitor for unexpected reporting values.",
+      "external_references": [
+        {"source_name": "mitre-attack", "external_id": "T0800"}
+      ]
+    },
+    {
+      "type": "attack-pattern",
+      "id": "attack-pattern--bbbb",
+      "name": "Modify Program",
+      "description": "Adversaries may modify a program.",
+      "external_references": [
+        {"source_name": "mitre-attack", "external_id": "T0889"}
+      ]
+    },
+    {
+      "type": "attack-pattern",
+      "id": "attack-pattern--cccc",
+      "name": "No Description Pattern",
+      "description": ""
+    },
+    {
+      "type": "relationship",
+      "id": "relationship--1111",
+      "relationship_type": "uses",
+      "source_ref": "attack-pattern--aaaa",
+      "target_ref": "attack-pattern--bbbb"
+    },
+    {
+      "type": "relationship",
+      "id": "relationship--2222",
+      "relationship_type": "uses",
+      "source_ref": "attack-pattern--aaaa",
+      "target_ref": "intrusion-set--missing"
+    }
+  ]
+}

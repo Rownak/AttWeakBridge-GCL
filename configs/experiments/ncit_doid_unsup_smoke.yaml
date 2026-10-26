@@ -1,0 +1,15 @@
+# Sprint 9 Phase 9.1 smoke readout (U0, U1, U2; seed 42, 20 epochs) on NCIT-DOID gold test pairs. The sibling filter is restricted to the
+# test split, so gold train pairs are not read. Phase 9.2 adds ncit_doid_unsup_test.yaml with the full matrix.
+#   uv run cga run evaluate --dataset ncit_doid_unsup --experiment ncit_doid_unsup_smoke
+evaluate:
+  methods:
+    - {method_id: u0,    label: "U0 frozen BERT",       kind: embedding_store, embedder_id: hf_mean_pool-bert_base, ref: latest}
+    - {method_id: u1-s42, label: "U1 BERT + projection", kind: gcl_run, model_id: u1-s42, ref: latest}
+    - {method_id: u2-s42, label: "U2 BERT + GCN",        kind: gcl_run, model_id: u2-s42, ref: latest}
+  evaluations:
+    - evaluation_id: gold_test
+      kind: gold_alignment
+      params: {ks: [1, 5, 10], split: test, modes: [global], sibling_filter_splits: [test]}
+    - evaluation_id: prf_test
+      kind: gold_alignment_prf
+      params: {split: test, assignment: greedy_one_to_one, top_k: 3, threshold: 0.0, biogitom_filters: false}

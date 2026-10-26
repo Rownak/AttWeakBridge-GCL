@@ -1,0 +1,12 @@
+# target_architecture.md §7.12 -- thin defaults only; a named figure set is a
+# separate configs/plots/<name>.yaml selected with --config (not an
+# --experiment overlay), since a figure spec references only
+# evaluation_id/metric_name and is reusable across datasets and experiments.
+plot:
+  inputs:
+    evaluate_run: latest              # the evaluate run whose metrics.parquet to plot
+  figures: []                         # [{figure_id, kind, select, x, hue, facet, params}]
+  format: {ext: png, dpi: 200}
+  loss_curves:
+    enabled: false                    # one loss-vs-epoch PNG per gcl_train model_id, auto-discovered
+

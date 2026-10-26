@@ -1,0 +1,17 @@
+# target_architecture.md §7.7
+training_data:
+  inputs:
+    ingest_run: latest              # supplies nodes, splits, alignments
+    text_embeddings:  {embedder_id: hf_mean_pool-pt_SecRoBERTa, run: latest}
+    graph_embeddings: {embedder_id: deepwalk-deepwalk, run: latest}
+  universe_policy: intersection     # intersection | text_only
+  sampler:
+    name: rank_topk                 # rank_topk | percentile | supervised
+    k: 30
+    top_pct: 0.04                   # percentile sampler
+    bottom_pct: 0.04
+    negatives_per_positive: 5       # supervised sampler (text negatives per gold pair)
+
+# No split configuration here: the node partition is drawn once by ingest
+# (configs/pipelines/ingest.yaml, split.fractions/seed) and read from
+# splits.parquet; every example inherits its anchor's split (§5.3 step 4).

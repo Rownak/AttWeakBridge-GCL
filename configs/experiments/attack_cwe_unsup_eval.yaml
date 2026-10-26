@@ -1,0 +1,23 @@
+# Sprint 9 Phase 9.2: ATT&CK-CWE readout of U0 / U1 / U2 (seeds 42 / 43 / 44). No gold set exists, so only the gold-free `neighborhood`
+# evaluation runs; a gold evaluation is added once `alignments` is filled in configs/datasets/attack_cwe_unsup.yaml.
+#   uv run cga run evaluate --dataset attack_cwe_unsup --experiment attack_cwe_unsup_eval
+evaluate:
+  methods:
+    - {method_id: u0, label: "BERT (frozen)", kind: embedding_store, embedder_id: hf_mean_pool-bert_base, ref: latest}
+    - {method_id: u1-s42, label: "U1 BERT + projection, triplet", kind: gcl_run, model_id: u1-s42, ref: latest}
+    - {method_id: u1-s43, label: "U1 BERT + projection, triplet", kind: gcl_run, model_id: u1-s43, ref: latest}
+    - {method_id: u1-s44, label: "U1 BERT + projection, triplet", kind: gcl_run, model_id: u1-s44, ref: latest}
+    - {method_id: u2-s42, label: "U2 BERT + GCN, triplet", kind: gcl_run, model_id: u2-s42, ref: latest}
+    - {method_id: u2-s43, label: "U2 BERT + GCN, triplet", kind: gcl_run, model_id: u2-s43, ref: latest}
+    - {method_id: u2-s44, label: "U2 BERT + GCN, triplet", kind: gcl_run, model_id: u2-s44, ref: latest}
+  evaluations:
+    - evaluation_id: neigh
+      kind: neighborhood
+      params:
+        ks: [1, 5, 10]
+        roles: [graph_1, graph_2]
+        views:
+          - {view_id: structural_r1, provider: hop_radius, params: {radius: 1}}
+          - {view_id: structural_r2, provider: hop_radius, params: {radius: 2}}
+          - {view_id: textual, provider: cosine_top_k,
+             params: {top_k: 10, reference: {kind: embedding_store, embedder_id: hf_mean_pool-bert_base, ref: latest}}}

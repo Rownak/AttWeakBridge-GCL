@@ -1,0 +1,10 @@
+# target_architecture.md §7.10 — each top-level key overlays the matching pipeline config.
+embed:
+  embedder: {kind: hf_mean_pool, model_ref: jackaduma/SecRoBERTa, label: pt_SecRoBERTa}
+training_data:
+  sampler: {name: rank_topk, k: 30}
+gcl_train:
+  model: {encoder: gcn}
+  loss: {name: triplet, margin: 1.0, alpha: 0.5}
+evaluate:
+  ranking: {ks: [1, 5, 10]}

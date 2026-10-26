@@ -1,0 +1,13 @@
+# target_architecture.md §7.12 -- figures for the neighborhood_compare evaluate
+# experiment, run as:
+#   cga run plot --dataset attack_cwe --config configs/plots/neighborhood_compare.yaml
+plot:
+  figures:
+    - {figure_id: precision_at_k, kind: line,
+       select: {evaluation_id: neigh, metric_name: normalized_precision_at_k},
+       x: param_value, hue: method_label, facet: [view_id, graph_role]}
+    - {figure_id: silhouette, kind: line,
+       select: {evaluation_id: clusters, metric_name: silhouette},
+       x: param_value, hue: method_label, facet: [graph_role]}
+  loss_curves:
+    enabled: true                     # also plot all 8 gcl_train model_id loss curves

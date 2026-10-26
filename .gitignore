@@ -1,4 +1,16 @@
-datasets/
-model_outputs/
-model_outputs/ics_attack/llm_finetuned_models
-model_outputs/enterprise_attack/llm_finetuned_models
+legacy/datasets/
+legacy/model_outputs/
+def_docs/
+
+# New architecture directories
+/data/
+/artifacts/
+/models/
+mlruns/
+
+# uv / Python
+.venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+benchmark/

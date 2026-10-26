@@ -1,0 +1,20 @@
+# dev_docs/sweep_experiment_plan.md §3/§4 -- figures for the sampler_sweep_compare
+# evaluate experiment, run as:
+#   cga run plot --dataset attack_cwe --config configs/plots/sampler_sweep_compare.yaml
+#
+# Reuses the same select/x/hue/facet shape as neighborhood_compare.yaml -- the
+# plot pipeline is generic over metrics.parquet, so no new renderer code is
+# needed, only a config naming the sampler-sweep evaluate run's method_labels.
+plot:
+  figures:
+    - {figure_id: precision_at_k, kind: line,
+       select: {evaluation_id: neigh, metric_name: normalized_precision_at_k},
+       x: param_value, hue: method_label, facet: [view_id, graph_role]}
+    - {figure_id: mrr, kind: line,
+       select: {evaluation_id: neigh, metric_name: mrr},
+       x: param_value, hue: method_label, facet: [view_id, graph_role]}
+    - {figure_id: silhouette, kind: line,
+       select: {evaluation_id: clusters, metric_name: silhouette},
+       x: param_value, hue: method_label, facet: [graph_role]}
+  loss_curves:
+    enabled: true                     # also plot all 8 sweep points' gcl_train loss curves

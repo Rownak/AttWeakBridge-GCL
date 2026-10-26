@@ -1,0 +1,17 @@
+# Sprint 5 Phase 5.2 -- A3 (trainable MLP adapter, no edges): chosen setting (tau=0.05, 50 epochs, lambda=0.25), 3 seeds. Run as:
+#   uv run cga run evaluate --dataset ncit_doid_srga --experiment ncit_doid_srga_mlp
+# Val plus train (informational); the single test readout is Phase 5.4.
+evaluate:
+  methods:
+    - {method_id: sapbert, label: "SapBERT (A0)", kind: embedding_store, embedder_id: hf_mean_pool-sapbert, ref: latest}
+    - {method_id: "srga-nb-l0.25-dir", label: "A1 nb l=0.25 dir", kind: gcl_run, model_id: "srga-nb-l0.25-dir", ref: latest}
+    - {method_id: "srga-mlp-l0.25-s42", label: "A3 seed 42", kind: gcl_run, model_id: "srga-mlp-l0.25-s42", ref: latest}
+    - {method_id: "srga-mlp-l0.25-s43", label: "A3 seed 43", kind: gcl_run, model_id: "srga-mlp-l0.25-s43", ref: latest}
+    - {method_id: "srga-mlp-l0.25-s44", label: "A3 seed 44", kind: gcl_run, model_id: "srga-mlp-l0.25-s44", ref: latest}
+  evaluations:
+    - evaluation_id: gold_val
+      kind: gold_alignment
+      params: {ks: [1, 5, 10], split: val, modes: [global]}
+    - evaluation_id: gold_train
+      kind: gold_alignment
+      params: {ks: [1, 5, 10], split: train, modes: [global]}

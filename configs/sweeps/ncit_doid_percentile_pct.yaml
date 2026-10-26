@@ -1,0 +1,14 @@
+# Sprint 3 Phase 3.3 -- percentile.{top_pct,bottom_pct} sweep, ncit_doid (repeat of Phase 2.1).
+# Run as: uv run cga sweep --spec configs/sweeps/ncit_doid_percentile_pct.yaml
+#
+# top_pct/bottom_pct are paired (equal to each other) via zip:, not crossed.
+# fixed: pins SapBERT as the text embedder (pipeline default is SecRoBERTa).
+pipeline: training_data
+dataset: ncit_doid
+fixed:
+  training_data.inputs.text_embeddings.embedder_id: hf_mean_pool-sapbert
+sweep:
+  training_data.sampler.name: [percentile]
+  zip: [training_data.sampler.top_pct, training_data.sampler.bottom_pct]
+  training_data.sampler.top_pct: [0.02, 0.05, 0.1]
+  training_data.sampler.bottom_pct: [0.02, 0.05, 0.1]

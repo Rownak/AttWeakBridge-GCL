@@ -1,0 +1,20 @@
+# Sprint 5 Phase 5.1 -- training-free SRGA (A1) beta grid, evaluated on val only (no test reads). Run as:
+#   uv run cga run evaluate --dataset ncit_doid_srga --experiment ncit_doid_srga_grid
+# Models: srga-nb-l<lambda>[-dir] from `gcl_train` with encoder=residual_adapter, adapter=neighbor_mean.
+evaluate:
+  methods:
+    - {method_id: sapbert, label: "SapBERT (A0)", kind: embedding_store, embedder_id: hf_mean_pool-sapbert, ref: latest}
+    - {method_id: "srga-nb-l0", label: "SRGA nb l=0", kind: gcl_run, model_id: "srga-nb-l0", ref: latest}
+    - {method_id: "srga-nb-l0.1", label: "SRGA nb l=0.1", kind: gcl_run, model_id: "srga-nb-l0.1", ref: latest}
+    - {method_id: "srga-nb-l0.25", label: "SRGA nb l=0.25", kind: gcl_run, model_id: "srga-nb-l0.25", ref: latest}
+    - {method_id: "srga-nb-l0.5", label: "SRGA nb l=0.5", kind: gcl_run, model_id: "srga-nb-l0.5", ref: latest}
+    - {method_id: "srga-nb-l1", label: "SRGA nb l=1", kind: gcl_run, model_id: "srga-nb-l1", ref: latest}
+    - {method_id: "srga-nb-l0-dir", label: "SRGA nb l=0 dir", kind: gcl_run, model_id: "srga-nb-l0-dir", ref: latest}
+    - {method_id: "srga-nb-l0.1-dir", label: "SRGA nb l=0.1 dir", kind: gcl_run, model_id: "srga-nb-l0.1-dir", ref: latest}
+    - {method_id: "srga-nb-l0.25-dir", label: "SRGA nb l=0.25 dir", kind: gcl_run, model_id: "srga-nb-l0.25-dir", ref: latest}
+    - {method_id: "srga-nb-l0.5-dir", label: "SRGA nb l=0.5 dir", kind: gcl_run, model_id: "srga-nb-l0.5-dir", ref: latest}
+    - {method_id: "srga-nb-l1-dir", label: "SRGA nb l=1 dir", kind: gcl_run, model_id: "srga-nb-l1-dir", ref: latest}
+  evaluations:
+    - evaluation_id: gold_val
+      kind: gold_alignment
+      params: {ks: [1, 5, 10], split: val, modes: [global]}
