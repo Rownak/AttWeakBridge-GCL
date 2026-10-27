@@ -85,6 +85,21 @@ class DatasetAdapter(ABC):
         """
         return iter(())
 
+    def alignment_provenance(self) -> list[dict] | None:
+        """Per-pair provenance rows for the last ``iter_alignments()`` call.
+
+        Default: ``None`` (no sidecar). Adapters whose gold comes with
+        provenance return rows matching ``ALIGNMENT_PROVENANCE_SCHEMA``.
+        """
+        return None
+
+    def alignment_report(self) -> dict | None:
+        """Summary (source, sha256, drops by reason) of the last ``iter_alignments()`` call.
+
+        Default: ``None``.
+        """
+        return None
+
     def source_fingerprint(self) -> dict[str, str]:
         """Return ``{relative_path: sha256}`` for every raw file this adapter read.
 

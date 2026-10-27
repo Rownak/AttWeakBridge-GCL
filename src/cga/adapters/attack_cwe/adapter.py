@@ -1,7 +1,8 @@
 """``attack_cwe`` dataset adapter: MITRE ATT&CK (STIX) + MITRE CWE (XML) -> canonical records.
 
-No alignment ground truth is available for this dataset (target_architecture.md
-§4.2); evaluation is unsupervised only until a mapping is supplied.
+Alignment ground truth is optional: with ``alignments: null`` the adapter yields
+none (unsupervised only); with an ``alignments.equivalence`` block it reads the
+selected ATT&CK -> CWE gold CSV through ``cga.data.gold_csv``.
 """
 
 from __future__ import annotations
@@ -26,7 +27,11 @@ from cga.adapters.attack_cwe.stix_parser import (
 from cga.adapters.base import DatasetAdapter, GraphSpec, register_adapter
 from cga.core.errors import MissingInputError
 from cga.core.io import sha256_file
+from cga.data.gold_csv import GoldAlignmentConfig, read_gold_csv
 from cga.data.schemas import AlignmentRecord, EdgeRecord, NodeRecord, TextRecord
+
+
+_GOLD_ATTACK_TYPE = "attack-pattern"  # STIX type of ATT&CK (sub-)techniques
 
 
 class AttackConfig(BaseModel):
@@ -68,7 +73,14 @@ class AttackCweAdapter(DatasetAdapter):
         GraphSpec(key="cwe", role="graph_2", display_name="MITRE CWE"),
     )
 
-    def __init__(self, config: AttackCweAdapterConfig, *, root: str | Path, text_variants: dict) -> None:
+    def __init__(
+        self,
+        config: AttackCweAdapterConfig,
+        *,
+        root: str | Path,
+        text_variants: dict,
+        alignments: dict | None = None,
+    ) -> None:
         """Build the adapter from its validated config block.
 
         Args:
@@ -77,16 +89,27 @@ class AttackCweAdapter(DatasetAdapter):
                 (``dataset.root`` in the dataset YAML).
             text_variants: ``{variant_name: {attack: [...], cwe: [...]}}`` from
                 the dataset YAML's ``text_variants`` block.
+            alignments: The YAML's ``alignments.equivalence`` block (gold CSV
+                selection and split), or ``None`` for no ground truth.
+
+        Raises:
+            ConfigError: If ``alignments.source`` is not a key of ``sources``.
         """
         self._config = config
         self._root = Path(root)
         self._text_variants = text_variants
         self._attack_path = self._root / config.attack.file
         self._cwe_path = self._root / config.cwe.file
+        self._gold = GoldAlignmentConfig(**alignments) if alignments else None
+        self._gold_path = self._root / self._gold.selected_path() if self._gold else None
+        self._gold_result = None
 
     def validate_sources(self) -> None:
         """Raise ``MissingInputError`` with actionable paths if a source file is absent."""
-        for path in (self._attack_path, self._cwe_path):
+        paths = [self._attack_path, self._cwe_path]
+        if self._gold_path is not None:
+            paths.append(self._gold_path)
+        for path in paths:
             if not path.is_file():
                 raise MissingInputError(f"attack_cwe adapter: required source file not found: {path}")
 
@@ -125,10 +148,40 @@ class AttackCweAdapter(DatasetAdapter):
         yield from iter_cwe_texts(cwe, graph_key="cwe", text_variants=cwe_variants)
 
     def iter_alignments(self) -> Iterator[AlignmentRecord]:
-        return iter(())
+        if self._gold is None:
+            return iter(())
+        # Resolve by external_id (Txxxx[.yyy] / CWE-n); ids absent from the graphs are dropped by the reader.
+        # Only techniques are gold sources: old mitigations (course-of-action) reuse technique ids,
+        # so first-wins would silently point gold at the wrong node type. An id that is still
+        # shared by several candidates is left out (dropped and counted), not guessed.
+        candidates: dict[str, dict[str, list[str]]] = {"attack": {}, "cwe": {}}
+        for node in self.iter_nodes():
+            if not node.external_id:
+                continue
+            if node.graph_key == "attack" and node.node_type != _GOLD_ATTACK_TYPE:
+                continue
+            candidates[node.graph_key].setdefault(node.external_id, []).append(node.node_id)
+        ids = {
+            key: {ext: nodes[0] for ext, nodes in by_ext.items() if len(nodes) == 1}
+            for key, by_ext in candidates.items()
+        }
+        self._gold_result = read_gold_csv(
+            self._gold_path,
+            cfg=self._gold,
+            source_ids=ids["attack"],
+            target_ids=ids["cwe"],
+            root=self._root,
+        )
+        return iter(self._gold_result.alignments)
+
+    def alignment_provenance(self) -> list[dict] | None:
+        return self._gold_result.provenance if self._gold_result else None
+
+    def alignment_report(self) -> dict | None:
+        return self._gold_result.report if self._gold_result else None
 
     def source_fingerprint(self) -> dict[str, str]:
-        return {
-            str(self._attack_path.relative_to(self._root)): sha256_file(self._attack_path),
-            str(self._cwe_path.relative_to(self._root)): sha256_file(self._cwe_path),
-        }
+        paths = [self._attack_path, self._cwe_path]
+        if self._gold_path is not None:
+            paths.append(self._gold_path)
+        return {str(p.relative_to(self._root)): sha256_file(p) for p in paths}

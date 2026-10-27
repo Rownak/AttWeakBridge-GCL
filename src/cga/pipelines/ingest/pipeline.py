@@ -19,13 +19,13 @@ from cga import __version__ as PIPELINE_VERSION
 from cga.adapters.base import DatasetAdapter
 from cga.core.artifacts import write_latest
 from cga.core.errors import ConfigError
-from cga.core.io import write_json
+from cga.core.io import write_json, write_parquet
 from cga.core.pipeline import Pipeline, Step
 from cga.core.registry import adapters as adapter_registry
 from cga.core.registry import pipelines
 from cga.core.run import RunContext
 from cga.data.graph_store import write_alignments, write_edges, write_nodes, write_splits, write_texts
-from cga.data.schemas import ALIGNMENTS_SCHEMA, EDGES_SCHEMA, NODES_SCHEMA, SPLITS_SCHEMA, TEXTS_SCHEMA
+from cga.data.schemas import ALIGNMENT_PROVENANCE_SCHEMA, ALIGNMENTS_SCHEMA, EDGES_SCHEMA, NODES_SCHEMA, SPLITS_SCHEMA, TEXTS_SCHEMA
 from cga.pipelines.ingest.splitter import split_nodes
 
 
@@ -40,6 +40,8 @@ class _IngestState:
         self.alignments_table: pa.Table | None = None
         self.splits_table: pa.Table | None = None
         self.n_dropped_edges: int = 0
+        self.alignment_report: dict[str, Any] | None = None
+        self.provenance_path: Path | None = None
         self.output_dir: Path | None = None
 
 
@@ -211,6 +213,19 @@ class IngestAlignmentsStep:
         self._state.alignments_table = table
         ctx.logger.info("ingest_alignments: wrote %d alignment rows", table.num_rows)
 
+        provenance = self._state.adapter.alignment_provenance()
+        if provenance is not None:
+            # Sidecar: alignments.parquet is shared by every dataset and keeps its schema.
+            path = self._state.output_dir / "alignment_provenance.parquet"
+            write_parquet(
+                pa.Table.from_pylist(provenance, schema=ALIGNMENT_PROVENANCE_SCHEMA),
+                path,
+                schema=ALIGNMENT_PROVENANCE_SCHEMA,
+            )
+            self._state.provenance_path = path
+            self._state.alignment_report = self._state.adapter.alignment_report()
+            ctx.logger.info("ingest_alignments: gold report %s", self._state.alignment_report)
+
 
 class SplitNodesStep:
     """Step 6: assign every node a train/val/test split (§5.1.1), write ``splits.parquet``."""
@@ -326,12 +341,16 @@ class ValidateAndManifestStep:
             ("stats", stats_path),
         ):
             ctx.manifest.record_output(name, path)
+        if state.provenance_path is not None:
+            ctx.manifest.record_output("alignment_provenance", state.provenance_path)
 
         ctx.manifest.summary = {
             "n_nodes": stats["n_nodes"],
             "n_edges": stats["n_edges"],
             "n_alignments": stats["n_alignments"],
         }
+        if state.alignment_report is not None:
+            ctx.manifest.summary.update(state.alignment_report)
 
 
 @pipelines.register("ingest")

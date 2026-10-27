@@ -68,7 +68,25 @@ RESIDUAL_ROWS = [
     ("r2", "SapBERT + GCN(DeepWalk)", "SapBERT top-k", "InfoNCE"),
     ("r3", "SapBERT + GCN(SapBERT) + GCN(DeepWalk)", "SapBERT top-k", "InfoNCE"),
 ]
-ROW_SETS = {"matrix": PAPER_ROWS, "deepwalk": DEEPWALK_ROWS, "residual": RESIDUAL_ROWS}
+# Sprint 10 rows (ATT&CK-CWE, SecureBERT2; cross-graph SecureBERT2 top-k pairs, InfoNCE; fusion is score-level, untrained).
+ATTACK_ENT_ROWS = [
+    ("ent-r1", "SecureBERT2 (frozen)", "–", "–"),
+    ("ent-r2", "GCN(SecureBERT2)", "SecureBERT2 top-k", "InfoNCE"),
+    ("ent-r3", "SecureBERT2 + 0.25 x GCN(SecureBERT2) (fusion)", "SecureBERT2 top-k", "InfoNCE"),
+]
+# Sprint 10.5: the same three rows with SecRoBERTa as the text encoder.
+ATTACK_ENT_SRB_ROWS = [
+    ("ent-s-r1", "SecRoBERTa (frozen)", "–", "–"),
+    ("ent-s-r2", "GCN(SecRoBERTa)", "SecRoBERTa top-k", "InfoNCE"),
+    ("ent-s-r3", "SecRoBERTa + 0.25 x GCN(SecRoBERTa) (fusion)", "SecRoBERTa top-k", "InfoNCE"),
+]
+ROW_SETS = {
+    "matrix": PAPER_ROWS,
+    "deepwalk": DEEPWALK_ROWS,
+    "residual": RESIDUAL_ROWS,
+    "attack_ent": ATTACK_ENT_ROWS,
+    "attack_ent_srb": ATTACK_ENT_SRB_ROWS,
+}
 _COUNT_METRICS = {"n_predicted", "n_correct", "n_gold", "n_unique_sources", "n_unique_targets"}
 
 
@@ -290,11 +308,95 @@ def build_comparison(
     return _markdown_table(header, body)
 
 
+def build_source_report(
+    aggs: dict[str, pd.DataFrame], *, view: str = "global", rows: list[tuple[str, str, str, str]] | None = None
+) -> str:
+    """Render the Sprint 10 report: one table per gold source and a compact MRR / F1 table (row x source).
+
+    Each source is a separate gold set read by its own evaluate run; scores are never pooled. The per-source tables add
+    ``#Gold`` and the recall ceiling ``unique sources / #Gold`` (one-to-one assignment gives each source one prediction).
+
+    Args:
+        aggs: ``{source name: aggregate() output of that source's evaluate run}``.
+        view: ``gold_alignment`` view for the ranking columns.
+        rows: Row set (default :data:`ATTACK_ENT_ROWS`; Phase 10.5 passes :data:`ATTACK_ENT_SRB_ROWS`).
+
+    Returns:
+        The Markdown text.
+    """
+    header = ["Variant", "Seeds"] + [c[0] for c in _RANKING_COLUMNS + _PRF_COLUMNS] + ["#Gold", "R ceiling"]
+    parts: list[str] = []
+    compact: dict[str, dict[str, str]] = {}
+    for source, agg in aggs.items():
+        ranking_eval = _first_evaluation(agg, "gold_alignment", None)
+        prf_eval = _first_evaluation(agg, "gold_alignment_prf", None)
+        n_seeds = agg.groupby("method_group").n_seeds.max()
+        body = []
+        for key, variant, _, _ in rows or ATTACK_ENT_ROWS:
+            if key not in set(agg.method_group):
+                continue
+            cells = [_cell(agg, key, ranking_eval, view, n, k) for _, n, k in _RANKING_COLUMNS]
+            cells += [_cell(agg, key, prf_eval, None, n, k) for _, n, k in _PRF_COLUMNS]
+            n_gold = _mean(agg, key, prf_eval, None, "n_gold", None)
+            n_src = _mean(agg, key, prf_eval, None, "n_unique_sources", None)
+            cells.append(MISSING if n_gold is None else f"{n_gold:.0f}")
+            cells.append(MISSING if not n_gold or n_src is None else f"{n_src / n_gold:.4f}")
+            body.append([variant, str(int(n_seeds[key]))] + cells)
+            mrr = _cell(agg, key, ranking_eval, view, "mrr", None)
+            f1 = _cell(agg, key, prf_eval, None, "f1", None)
+            compact.setdefault(variant, {})[source] = f"{mrr} / {f1}"
+        parts += [f"## Gold source `{source}`", "", _markdown_table(header, body), ""]
+    sources = list(aggs)
+    rows = [[v] + [compact[v].get(s, MISSING) for s in sources] for v in compact]
+    parts += ["## MRR / F1 per row and gold source", "", _markdown_table(["Row"] + sources, rows), ""]
+    return "\n".join(parts)
+
+
+def build_encoder_comparison(
+    first: dict[str, pd.DataFrame],
+    second: dict[str, pd.DataFrame],
+    *,
+    names: tuple[str, str],
+    rows: tuple[list, list],
+    view: str = "global",
+) -> str:
+    """Render MRR and F1 of the three Sprint 10 rows under two text encoders, per gold source, with the difference.
+
+    Args:
+        first: ``{source: aggregate()}`` of the first encoder's evaluate runs.
+        second: Same for the second encoder (same sources).
+        names: Encoder names for the column headers.
+        rows: Row sets of the two encoders; rows are matched by position (frozen, GCN, fusion).
+        view: ``gold_alignment`` view for MRR.
+
+    Returns:
+        The Markdown table; ``Δ`` is ``second - first`` of the seed means.
+    """
+    header = ["Row", "Source"]
+    for metric in ("MRR", "F1"):
+        header += [f"{names[0]} {metric}", f"{names[1]} {metric}", f"Δ {metric}"]
+    body = []
+    for (k1, v1, _, _), (k2, _, _, _) in zip(*rows):
+        for source in first:
+            if source not in second:
+                continue
+            cells = [v1.replace("SecureBERT2", "encoder"), source]
+            for metric, name, which in (("MRR", "mrr", 0), ("F1", "f1", 1)):
+                vals = []
+                for agg, key in ((first[source], k1), (second[source], k2)):
+                    ev = _first_evaluation(agg, ("gold_alignment", "gold_alignment_prf")[which], None)
+                    vals.append(_mean(agg, key, ev, view if which == 0 else None, name, None))
+                cells += [MISSING if v is None else f"{v:.4f}" for v in vals]
+                cells.append(MISSING if None in vals else f"{vals[1] - vals[0]:+.4f}")
+            body.append(cells)
+    return _markdown_table(header, body)
+
+
 def main() -> None:
     """Write ``summary.md`` and ``summary.csv`` into the run directory."""
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--dataset", required=True)
-    ap.add_argument("--run", required=True, help="evaluate run id")
+    ap.add_argument("--run", required=True, help="evaluate run id (with --source-run: the run whose directory receives sources_summary.md)")
     ap.add_argument("--root", default="artifacts/evaluations", help="evaluations root")
     ap.add_argument("--ranking-eval", help="gold_alignment evaluation_id (default: first)")
     ap.add_argument("--prf-eval", help="gold_alignment_prf evaluation_id (default: first)")
@@ -302,11 +404,37 @@ def main() -> None:
     ap.add_argument("--prefix", default="", help="method-group prefix of this run (Phase 9.3: sap-)")
     ap.add_argument("--rows", default="matrix", choices=list(ROW_SETS), help="paper-table row set (Phase 9.4: deepwalk)")
     ap.add_argument("--text-label", default="BERT", help="encoder name in the paper-table row labels")
+    ap.add_argument("--source-run", action="append", default=[], metavar="NAME=RUN",
+                    help="Sprint 10: gold source name and its evaluate run; repeat once per source (writes sources_summary.md)")
+    ap.add_argument("--compare-source-run", action="append", default=[], metavar="NAME=RUN",
+                    help="Sprint 10.5: the other encoder's evaluate run per source (10.4 runs); needs --source-run")
+    ap.add_argument("--compare-rows", default="attack_ent", choices=list(ROW_SETS), help="row set of the --compare-source-run runs")
+    ap.add_argument("--compare-label", default="BERT", help="encoder name of the --compare run")
     ap.add_argument("--compare", help="evaluate run id of a second run (same dataset) to compare against")
     ap.add_argument("--compare-prefix", default="", help="method-group prefix of the --compare run")
-    ap.add_argument("--compare-label", default="BERT", help="encoder name of the --compare run")
     args = ap.parse_args()
 
+    if args.source_run:
+        pairs = [a.split("=", 1) for a in args.source_run]
+        aggs = {n: aggregate(pd.read_parquet(Path(args.root) / args.dataset / r / "metrics.parquet")) for n, r in pairs}
+        out = Path(args.root) / args.dataset / args.run / "sources_summary.md"
+        text = build_source_report(aggs, view=args.view, rows=ROW_SETS[args.rows])
+        if args.compare_source_run:
+            other = {
+                n: aggregate(pd.read_parquet(Path(args.root) / args.dataset / r / "metrics.parquet"))
+                for n, r in (a.split("=", 1) for a in args.compare_source_run)
+            }
+            text += (
+                f"\n## {args.compare_label} vs {args.text_label}: MRR and F1 per row and gold source\n\n"
+                + build_encoder_comparison(
+                    other, aggs, names=(args.compare_label, args.text_label),
+                    rows=(ROW_SETS[args.compare_rows], ROW_SETS[args.rows]), view=args.view,
+                )
+                + "\n"
+            )
+        out.write_text(text, encoding="utf-8")
+        print(f"wrote {out}")
+        return
     run_dir = Path(args.root) / args.dataset / args.run
     agg = aggregate(pd.read_parquet(run_dir / "metrics.parquet"))
     text = build_markdown(agg, ranking_eval=args.ranking_eval, prf_eval=args.prf_eval, view=args.view)

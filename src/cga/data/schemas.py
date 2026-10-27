@@ -140,6 +140,22 @@ class AlignmentRecord(BaseModel):
     candidates: list[str] | None = None
 
 
+# --- alignment_provenance.parquet (sidecar of alignments.parquet) -------------
+
+ALIGNMENT_PROVENANCE_SCHEMA = pa.schema(
+    [
+        pa.field("alignment_id", pa.string(), nullable=False),
+        pa.field("gold_source", pa.string(), nullable=False),
+        pa.field("source_file", pa.string(), nullable=False),
+        pa.field("source_sha256", pa.string(), nullable=False),
+        pa.field("edge_source", pa.string(), nullable=False),
+        pa.field("capec_ids", pa.list_(pa.string()), nullable=False),
+        pa.field("attack_id_cited", pa.string(), nullable=False),
+        pa.field("n_csv_rows", pa.int64(), nullable=False),
+    ]
+)
+
+
 # --- 6.5 splits.parquet -------------------------------------------------------
 
 SPLITS_SCHEMA = pa.schema(

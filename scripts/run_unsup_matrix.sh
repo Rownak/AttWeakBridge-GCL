@@ -15,6 +15,12 @@
 #   TEXT_EMBEDDER=deepwalk-deepwalk PREFIX=dw- scripts/run_unsup_matrix.sh ncit_doid_unsup 5   # priority 5: dw-u2-own (DeepWalk's own pairs)
 # Phase 9.5 (SapBERT residual with GCN branches, InfoNCE, SapBERT pairs of the seed):
 #   PREFIX=res- SAMPLER_PREFIX=sap- scripts/run_unsup_matrix.sh ncit_doid_unsup 6            # priority 6: res-r1, res-r2, res-r3
+# Phase 10.3 (ATT&CK-CWE, SecureBERT2 residual GCN without the frozen block, InfoNCE, cross-graph SecureBERT2 pairs of the seed):
+#   TEXT_EMBEDDER=hf_mean_pool-SecureBERT2 PREFIX=ent- SAMPLER_PREFIX=sb2- scripts/run_unsup_matrix.sh attack_cwe_ent 7
+#   priority 7: ent-g-sb2 (sampler id sb2-rank_topk-k5)
+# Phase 10.5 (the 10.3 row with SecRoBERTa as the text encoder):
+#   TEXT_EMBEDDER=hf_mean_pool-pt_SecRoBERTa PREFIX=ent- SAMPLER_PREFIX=srb- scripts/run_unsup_matrix.sh attack_cwe_ent 8
+#   priority 8: ent-g-srb (sampler id srb-rank_topk-k5)
 # SAMPLER_PREFIX (default PREFIX) names the sampler lineage the rows read, so model ids and pseudo-pair provenance are set apart.
 set -euo pipefail
 
@@ -92,6 +98,22 @@ for seed in "${SEEDS[@]}"; do
     gcl "$seed" unsup_u1 r1 rank_topk-k5 "${res[@]}" --set gcl_train.model.adapter=gcn
     gcl "$seed" unsup_u1 r2 rank_topk-k5 "${res[@]}" --set gcl_train.model.adapter=none --set gcl_train.model.graph_branch=true
     gcl "$seed" unsup_u1 r3 rank_topk-k5 "${res[@]}" --set gcl_train.model.adapter=gcn --set gcl_train.model.graph_branch=true
+  fi
+  if has 7; then
+    td "$seed" rank_topk-k5
+    # Sprint 5 A12 module: residual_adapter + gcn, no frozen block (z = h); each seed reads its own pair set.
+    gcl "$seed" unsup_u1 g-sb2 rank_topk-k5 \
+      --set gcl_train.model.encoder=residual_adapter --set gcl_train.model.adapter=gcn \
+      --set gcl_train.model.residual_floor=false --set gcl_train.loss.name=infonce \
+      --set "gcl_train.inputs.training_data_run=$(pinned_run "$seed" rank_topk-k5)"
+  fi
+  if has 8; then
+    td "$seed" rank_topk-k5
+    # Same module as priority 7; only the text store (TEXT_EMBEDDER) and the sampler lineage differ.
+    gcl "$seed" unsup_u1 g-srb rank_topk-k5 \
+      --set gcl_train.model.encoder=residual_adapter --set gcl_train.model.adapter=gcn \
+      --set gcl_train.model.residual_floor=false --set gcl_train.loss.name=infonce \
+      --set "gcl_train.inputs.training_data_run=$(pinned_run "$seed" rank_topk-k5)"
   fi
   if has 5; then
     td "$seed" rank_topk-k5

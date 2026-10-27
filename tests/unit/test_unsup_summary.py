@@ -133,3 +133,36 @@ def test_deepwalk_row_set_labels_rows_and_names_the_pseudo_pair_source():
     assert lines[3].startswith("| GCN of DeepWalk | SapBERT top-k | Triplet |")
     assert lines[4].startswith("| GCN of DeepWalk | DeepWalk top-k | Triplet |")
     assert len(lines) == 5
+
+
+def test_source_report_has_one_table_per_source_and_a_compact_table():
+    def frame(mrr, n_gold):
+        rows = []
+        for seed in (42, 43):
+            rows += [_row(f"ent-r2-s{seed}", "gold", "gold_alignment", "mrr", mrr + seed / 1000),
+                     _row(f"ent-r2-s{seed}", "prf", "gold_alignment_prf", "f1", 0.5),
+                     _row(f"ent-r2-s{seed}", "prf", "gold_alignment_prf", "n_gold", n_gold),
+                     _row(f"ent-r2-s{seed}", "prf", "gold_alignment_prf", "n_unique_sources", n_gold / 2)]
+        return unsup_summary.aggregate(pd.DataFrame(rows))
+
+    text = unsup_summary.build_source_report({"stix": frame(0.3, 100.0), "union": frame(0.4, 200.0)})
+    assert "## Gold source `stix`" in text and "## Gold source `union`" in text
+    assert "## MRR / F1 per row and gold source" in text
+    assert "| 100 | 0.5000 |" in text and "| 200 | 0.5000 |" in text  # #Gold and recall ceiling
+
+
+def test_encoder_comparison_matches_rows_by_position_and_gives_the_difference():
+    def frame(prefix, mrr, f1):
+        rows = []
+        for seed in (42, 43):
+            rows += [_row(f"{prefix}-r2-s{seed}", "gold", "gold_alignment", "mrr", mrr),
+                     _row(f"{prefix}-r2-s{seed}", "prf", "gold_alignment_prf", "f1", f1)]
+        return unsup_summary.aggregate(pd.DataFrame(rows))
+
+    first = {"stix": frame("ent", 0.010, 0.002)}
+    second = {"stix": frame("ent-s", 0.030, 0.001)}
+    text = unsup_summary.build_encoder_comparison(
+        first, second, names=("A", "B"),
+        rows=(unsup_summary.ATTACK_ENT_ROWS, unsup_summary.ATTACK_ENT_SRB_ROWS),
+    )
+    assert "| 0.0100 | 0.0300 | +0.0200 | 0.0020 | 0.0010 | -0.0010 |" in text

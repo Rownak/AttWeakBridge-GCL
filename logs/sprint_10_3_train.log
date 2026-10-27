@@ -1,0 +1,108 @@
+2026-10-26 20:49:48,162 [INFO] cga: Starting step 'build_universe'
+2026-10-26 20:49:48,473 [INFO] cga: build_universe: 2927 nodes (0 held_out)
+2026-10-26 20:49:48,473 [INFO] cga: Finished step 'build_universe'
+2026-10-26 20:49:48,473 [INFO] cga: Starting step 'similarity'
+2026-10-26 20:49:48,517 [INFO] cga: similarity: text 1983x944, graph_1 1983x1983, graph_2 944x944
+2026-10-26 20:49:48,517 [INFO] cga: Finished step 'similarity'
+2026-10-26 20:49:48,518 [INFO] cga: Starting step 'sample'
+2026-10-26 20:49:49,241 [INFO] cga: sample: rank_topk produced 14635 examples
+2026-10-26 20:49:49,241 [INFO] cga: Finished step 'sample'
+2026-10-26 20:49:49,241 [INFO] cga: Starting step 'assign_example_split'
+2026-10-26 20:49:49,304 [INFO] cga: Finished step 'assign_example_split'
+2026-10-26 20:49:49,305 [INFO] cga: Starting step 'validate_and_manifest'
+2026-10-26 20:49:49,461 [INFO] cga: Finished step 'validate_and_manifest'
+Run '20261027T004948Z-8a16e080' succeeded: artifacts\training_data\attack_cwe_ent\sb2-rank_topk-k5\20261027T004948Z-8a16e080
+2026-10-26 20:50:09,498 [INFO] cga: Starting step 'load'
+2026-10-26 20:50:09,935 [INFO] cga: load: dropped 705/22979 edges with an endpoint outside the universe
+2026-10-26 20:50:10,056 [INFO] cga: load: universe=2927 nodes, 44548 edges (directed pairs), 14635/14635 examples are train-split
+2026-10-26 20:50:10,059 [INFO] cga: Finished step 'load'
+2026-10-26 20:50:10,059 [INFO] cga: Starting step 'train'
+2026-10-26 20:50:11,333 [INFO] cga: epoch 10/100: loss=1.9798 loss_text=1.9798 loss_graph=9.8044
+2026-10-26 20:50:12,136 [INFO] cga: epoch 20/100: loss=0.7522 loss_text=0.7522 loss_graph=10.0608
+2026-10-26 20:50:12,921 [INFO] cga: epoch 30/100: loss=0.5514 loss_text=0.5514 loss_graph=10.2502
+2026-10-26 20:50:13,696 [INFO] cga: epoch 40/100: loss=0.4289 loss_text=0.4289 loss_graph=9.9706
+2026-10-26 20:50:14,453 [INFO] cga: epoch 50/100: loss=0.3596 loss_text=0.3596 loss_graph=10.0210
+2026-10-26 20:50:15,210 [INFO] cga: epoch 60/100: loss=0.3039 loss_text=0.3039 loss_graph=9.9127
+2026-10-26 20:50:15,994 [INFO] cga: epoch 70/100: loss=0.2906 loss_text=0.2906 loss_graph=9.9069
+2026-10-26 20:50:16,798 [INFO] cga: epoch 80/100: loss=0.2782 loss_text=0.2782 loss_graph=9.9049
+2026-10-26 20:50:17,578 [INFO] cga: epoch 90/100: loss=0.2504 loss_text=0.2504 loss_graph=9.8286
+2026-10-26 20:50:18,327 [INFO] cga: epoch 100/100: loss=0.2391 loss_text=0.2391 loss_graph=9.8251
+2026-10-26 20:50:18,342 [INFO] cga: Finished step 'train'
+2026-10-26 20:50:18,342 [INFO] cga: Starting step 'export'
+2026-10-26 20:50:18,398 [INFO] cga: export: wrote 2927 x 256 node_embeddings to models\gcl\attack_cwe_ent\ent-g-sb2-s42\20261027T005009Z-abfb4112\node_embeddings
+2026-10-26 20:50:18,398 [INFO] cga: Finished step 'export'
+2026-10-26 20:50:18,398 [INFO] cga: Starting step 'manifest'
+2026-10-26 20:50:18,466 [INFO] cga: Finished step 'manifest'
+Run '20261027T005009Z-abfb4112' succeeded: models\gcl\attack_cwe_ent\ent-g-sb2-s42\20261027T005009Z-abfb4112
+2026-10-26 20:50:37,606 [INFO] cga: Starting step 'build_universe'
+2026-10-26 20:50:37,921 [INFO] cga: build_universe: 2927 nodes (0 held_out)
+2026-10-26 20:50:37,921 [INFO] cga: Finished step 'build_universe'
+2026-10-26 20:50:37,921 [INFO] cga: Starting step 'similarity'
+2026-10-26 20:50:37,983 [INFO] cga: similarity: text 1983x944, graph_1 1983x1983, graph_2 944x944
+2026-10-26 20:50:37,983 [INFO] cga: Finished step 'similarity'
+2026-10-26 20:50:37,983 [INFO] cga: Starting step 'sample'
+2026-10-26 20:50:38,664 [INFO] cga: sample: rank_topk produced 14635 examples
+2026-10-26 20:50:38,665 [INFO] cga: Finished step 'sample'
+2026-10-26 20:50:38,665 [INFO] cga: Starting step 'assign_example_split'
+2026-10-26 20:50:38,730 [INFO] cga: Finished step 'assign_example_split'
+2026-10-26 20:50:38,731 [INFO] cga: Starting step 'validate_and_manifest'
+2026-10-26 20:50:38,861 [INFO] cga: Finished step 'validate_and_manifest'
+Run '20261027T005037Z-f91190d7' succeeded: artifacts\training_data\attack_cwe_ent\sb2-rank_topk-k5\20261027T005037Z-f91190d7
+2026-10-26 20:51:00,369 [INFO] cga: Starting step 'load'
+2026-10-26 20:51:00,839 [INFO] cga: load: dropped 705/22979 edges with an endpoint outside the universe
+2026-10-26 20:51:00,985 [INFO] cga: load: universe=2927 nodes, 44548 edges (directed pairs), 14635/14635 examples are train-split
+2026-10-26 20:51:00,988 [INFO] cga: Finished step 'load'
+2026-10-26 20:51:00,988 [INFO] cga: Starting step 'train'
+2026-10-26 20:51:02,217 [INFO] cga: epoch 10/100: loss=1.4222 loss_text=1.4222 loss_graph=10.0788
+2026-10-26 20:51:02,971 [INFO] cga: epoch 20/100: loss=0.8480 loss_text=0.8480 loss_graph=10.2563
+2026-10-26 20:51:03,718 [INFO] cga: epoch 30/100: loss=0.5086 loss_text=0.5086 loss_graph=10.1041
+2026-10-26 20:51:04,487 [INFO] cga: epoch 40/100: loss=0.4469 loss_text=0.4469 loss_graph=9.9848
+2026-10-26 20:51:05,328 [INFO] cga: epoch 50/100: loss=0.3697 loss_text=0.3697 loss_graph=10.0063
+2026-10-26 20:51:06,139 [INFO] cga: epoch 60/100: loss=0.3125 loss_text=0.3125 loss_graph=9.9218
+2026-10-26 20:51:07,014 [INFO] cga: epoch 70/100: loss=0.2695 loss_text=0.2695 loss_graph=9.8862
+2026-10-26 20:51:07,852 [INFO] cga: epoch 80/100: loss=0.2518 loss_text=0.2518 loss_graph=9.8656
+2026-10-26 20:51:08,702 [INFO] cga: epoch 90/100: loss=0.2381 loss_text=0.2381 loss_graph=9.8427
+2026-10-26 20:51:09,529 [INFO] cga: epoch 100/100: loss=0.2343 loss_text=0.2343 loss_graph=9.8557
+2026-10-26 20:51:09,545 [INFO] cga: Finished step 'train'
+2026-10-26 20:51:09,545 [INFO] cga: Starting step 'export'
+2026-10-26 20:51:09,603 [INFO] cga: export: wrote 2927 x 256 node_embeddings to models\gcl\attack_cwe_ent\ent-g-sb2-s43\20261027T005100Z-f014bd14\node_embeddings
+2026-10-26 20:51:09,604 [INFO] cga: Finished step 'export'
+2026-10-26 20:51:09,604 [INFO] cga: Starting step 'manifest'
+2026-10-26 20:51:09,664 [INFO] cga: Finished step 'manifest'
+Run '20261027T005100Z-f014bd14' succeeded: models\gcl\attack_cwe_ent\ent-g-sb2-s43\20261027T005100Z-f014bd14
+2026-10-26 20:51:25,953 [INFO] cga: Starting step 'build_universe'
+2026-10-26 20:51:26,254 [INFO] cga: build_universe: 2927 nodes (0 held_out)
+2026-10-26 20:51:26,255 [INFO] cga: Finished step 'build_universe'
+2026-10-26 20:51:26,255 [INFO] cga: Starting step 'similarity'
+2026-10-26 20:51:26,300 [INFO] cga: similarity: text 1983x944, graph_1 1983x1983, graph_2 944x944
+2026-10-26 20:51:26,300 [INFO] cga: Finished step 'similarity'
+2026-10-26 20:51:26,300 [INFO] cga: Starting step 'sample'
+2026-10-26 20:51:27,006 [INFO] cga: sample: rank_topk produced 14635 examples
+2026-10-26 20:51:27,006 [INFO] cga: Finished step 'sample'
+2026-10-26 20:51:27,006 [INFO] cga: Starting step 'assign_example_split'
+2026-10-26 20:51:27,094 [INFO] cga: Finished step 'assign_example_split'
+2026-10-26 20:51:27,095 [INFO] cga: Starting step 'validate_and_manifest'
+2026-10-26 20:51:27,211 [INFO] cga: Finished step 'validate_and_manifest'
+Run '20261027T005125Z-8cf80473' succeeded: artifacts\training_data\attack_cwe_ent\sb2-rank_topk-k5\20261027T005125Z-8cf80473
+2026-10-26 20:51:47,776 [INFO] cga: Starting step 'load'
+2026-10-26 20:51:48,244 [INFO] cga: load: dropped 705/22979 edges with an endpoint outside the universe
+2026-10-26 20:51:48,366 [INFO] cga: load: universe=2927 nodes, 44548 edges (directed pairs), 14635/14635 examples are train-split
+2026-10-26 20:51:48,370 [INFO] cga: Finished step 'load'
+2026-10-26 20:51:48,370 [INFO] cga: Starting step 'train'
+2026-10-26 20:51:49,626 [INFO] cga: epoch 10/100: loss=1.4760 loss_text=1.4760 loss_graph=10.0535
+2026-10-26 20:51:50,435 [INFO] cga: epoch 20/100: loss=0.7678 loss_text=0.7678 loss_graph=10.1433
+2026-10-26 20:51:51,251 [INFO] cga: epoch 30/100: loss=0.5535 loss_text=0.5535 loss_graph=10.1713
+2026-10-26 20:51:52,017 [INFO] cga: epoch 40/100: loss=0.3836 loss_text=0.3836 loss_graph=10.0284
+2026-10-26 20:51:52,807 [INFO] cga: epoch 50/100: loss=0.3708 loss_text=0.3708 loss_graph=9.9565
+2026-10-26 20:51:53,573 [INFO] cga: epoch 60/100: loss=0.2943 loss_text=0.2943 loss_graph=9.8958
+2026-10-26 20:51:54,449 [INFO] cga: epoch 70/100: loss=0.2849 loss_text=0.2849 loss_graph=9.9006
+2026-10-26 20:51:55,232 [INFO] cga: epoch 80/100: loss=0.2673 loss_text=0.2673 loss_graph=9.8503
+2026-10-26 20:51:56,037 [INFO] cga: epoch 90/100: loss=0.2393 loss_text=0.2393 loss_graph=9.8469
+2026-10-26 20:51:56,908 [INFO] cga: epoch 100/100: loss=0.2425 loss_text=0.2425 loss_graph=9.8294
+2026-10-26 20:51:56,933 [INFO] cga: Finished step 'train'
+2026-10-26 20:51:56,933 [INFO] cga: Starting step 'export'
+2026-10-26 20:51:56,999 [INFO] cga: export: wrote 2927 x 256 node_embeddings to models\gcl\attack_cwe_ent\ent-g-sb2-s44\20261027T005147Z-4cba617a\node_embeddings
+2026-10-26 20:51:56,999 [INFO] cga: Finished step 'export'
+2026-10-26 20:51:57,000 [INFO] cga: Starting step 'manifest'
+2026-10-26 20:51:57,061 [INFO] cga: Finished step 'manifest'
+Run '20261027T005147Z-4cba617a' succeeded: models\gcl\attack_cwe_ent\ent-g-sb2-s44\20261027T005147Z-4cba617a

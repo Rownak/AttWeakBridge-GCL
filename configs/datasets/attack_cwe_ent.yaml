@@ -1,0 +1,36 @@
+# Top-level key (read by cga.core.protocol): training never reads gold; evaluate scores it.
+protocol: unsupervised
+dataset:
+  id: attack_cwe_ent
+  adapter: attack_cwe
+  root: ${paths.raw}
+  graphs:
+    graph_1: {key: attack, display_name: "MITRE ATT&CK (Enterprise)"}
+    graph_2: {key: cwe,    display_name: "MITRE CWE"}
+  adapter_config:
+    attack:
+      file: enterprise_cwe/enterprise-attack-20.0.json
+      edge_from_relationships: true
+      include_types: null
+    cwe:
+      file: enterprise_cwe/cwec_v4.20.xml
+      version: cwec_v4.20
+      edge_relations: [ChildOf]
+  text_variants:
+    description:   {attack: [description],
+                    cwe: [name, description, extended_description]}
+    full_metadata: {attack: [description, detection],
+                    cwe: [name, description, extended_description, modes_of_introduction,
+                          common_consequences, detection_methods, potential_mitigations,
+                          demonstrative_examples]}
+  alignments:
+    equivalence:
+      source: union                     # stix | capec | union | intersection (separate gold sets)
+      sources:
+        stix:         capec/1_attack_capec_cwe__from_stix_repo.csv
+        capec:        capec/2_attack_capec_cwe__from_capec_xml.csv
+        union:        capec/3_attack_capec_cwe__union.csv
+        intersection: capec/4_attack_capec_cwe__intersection.csv
+      columns: {source: attack_id_current, target: cwe_id}
+      # [train, val, test]; default = whole gold set is test (training never reads gold)
+      split: {fractions: [0.0, 0.0, 1.0], seed: 42, group_regex: '^(T\d+)'}

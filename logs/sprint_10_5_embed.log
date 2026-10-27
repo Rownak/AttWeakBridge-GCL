@@ -1,0 +1,21 @@
+2026-10-26 21:07:24,028 [INFO] cga: Starting step 'generate'
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+Loading weights:   0%|          | 0/103 [00:00<?, ?it/s]Loading weights:  85%|########5 | 88/103 [00:00<00:00, 879.68it/s]Loading weights: 100%|##########| 103/103 [00:00<00:00, 1021.51it/s]
+[transformers] [1mRobertaModel LOAD REPORT[0m from: jackaduma/SecRoBERTa
+Key                       | Status     |  | 
+--------------------------+------------+--+-
+lm_head.layer_norm.bias   | UNEXPECTED |  | 
+lm_head.layer_norm.weight | UNEXPECTED |  | 
+lm_head.dense.weight      | UNEXPECTED |  | 
+lm_head.bias              | UNEXPECTED |  | 
+lm_head.dense.bias        | UNEXPECTED |  | 
+
+Notes:
+- UNEXPECTED:	can be ignored when loading from different task/architecture; not ok if you expect identical arch.
+2026-10-26 21:13:56,709 [INFO] cga: Finished step 'generate'
+2026-10-26 21:13:56,709 [INFO] cga: Starting step 'materialize'
+2026-10-26 21:15:41,726 [INFO] cga: materialize: wrote 5131 vectors of dim 768
+2026-10-26 21:15:41,727 [INFO] cga: Finished step 'materialize'
+2026-10-26 21:15:41,727 [INFO] cga: Starting step 'validate_and_manifest'
+2026-10-26 21:15:41,764 [INFO] cga: Finished step 'validate_and_manifest'
+Run '20261027T010723Z-8bc08adc' succeeded: artifacts\embeddings\attack_cwe_ent\hf_mean_pool-pt_SecRoBERTa\20261027T010723Z-8bc08adc
