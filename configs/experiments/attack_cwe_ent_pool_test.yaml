@@ -1,0 +1,68 @@
+# Sprint 10 Phase 10.6 -- both encoders and a random baseline, each ranked against (a) every CWE (`*_full`, the 10.4 / 10.5 views)
+# and (b) the shared pool of the 151 CWEs in the union gold (`*_pool`, optimistic by construction: read it next to the random rows).
+#   uv run python scripts/make_target_pool.py --ingest data/processed/attack_cwe_ent/<union run> --check <the other three> #       --out data/processed/attack_cwe_ent/target_pool_union.json
+#   uv run python scripts/make_random_store.py --dataset attack_cwe_ent --reference <SecureBERT2 store run> --seed 42 --label rand42   (43, 44)
+#   uv run cga run evaluate --dataset attack_cwe_ent --experiment attack_cwe_ent_pool_test #       --set evaluate.inputs.ingest_run=<ingest run of that source>
+# No retraining: models are ent-g-sb2-s* (10.3) and ent-g-srb-s* (10.5). Fusion weight 0.25 is fixed from Sprint 9.5.
+evaluate:
+  methods:
+    - {method_id: ent-r1, label: "SecureBERT2 (frozen)", kind: embedding_store, embedder_id: hf_mean_pool-SecureBERT2, ref: latest}
+    - {method_id: ent-r2-s42, label: "GCN(SecureBERT2)", kind: gcl_run, model_id: ent-g-sb2-s42, ref: latest}
+    - {method_id: ent-r2-s43, label: "GCN(SecureBERT2)", kind: gcl_run, model_id: ent-g-sb2-s43, ref: latest}
+    - {method_id: ent-r2-s44, label: "GCN(SecureBERT2)", kind: gcl_run, model_id: ent-g-sb2-s44, ref: latest}
+    - method_id: ent-r3-s42
+      label: "SecureBERT2 + GCN(SecureBERT2)"
+      kind: fusion
+      members:
+        - {kind: embedding_store, embedder_id: hf_mean_pool-SecureBERT2, ref: latest, weight: 1.0}
+        - {kind: gcl_run, model_id: ent-g-sb2-s42, ref: latest, weight: 0.25}
+    - method_id: ent-r3-s43
+      label: "SecureBERT2 + GCN(SecureBERT2)"
+      kind: fusion
+      members:
+        - {kind: embedding_store, embedder_id: hf_mean_pool-SecureBERT2, ref: latest, weight: 1.0}
+        - {kind: gcl_run, model_id: ent-g-sb2-s43, ref: latest, weight: 0.25}
+    - method_id: ent-r3-s44
+      label: "SecureBERT2 + GCN(SecureBERT2)"
+      kind: fusion
+      members:
+        - {kind: embedding_store, embedder_id: hf_mean_pool-SecureBERT2, ref: latest, weight: 1.0}
+        - {kind: gcl_run, model_id: ent-g-sb2-s44, ref: latest, weight: 0.25}
+    - {method_id: ent-s-r1, label: "SecRoBERTa (frozen)", kind: embedding_store, embedder_id: hf_mean_pool-pt_SecRoBERTa, ref: latest}
+    - {method_id: ent-s-r2-s42, label: "GCN(SecRoBERTa)", kind: gcl_run, model_id: ent-g-srb-s42, ref: latest}
+    - {method_id: ent-s-r2-s43, label: "GCN(SecRoBERTa)", kind: gcl_run, model_id: ent-g-srb-s43, ref: latest}
+    - {method_id: ent-s-r2-s44, label: "GCN(SecRoBERTa)", kind: gcl_run, model_id: ent-g-srb-s44, ref: latest}
+    - method_id: ent-s-r3-s42
+      label: "SecRoBERTa + GCN(SecRoBERTa)"
+      kind: fusion
+      members:
+        - {kind: embedding_store, embedder_id: hf_mean_pool-pt_SecRoBERTa, ref: latest, weight: 1.0}
+        - {kind: gcl_run, model_id: ent-g-srb-s42, ref: latest, weight: 0.25}
+    - method_id: ent-s-r3-s43
+      label: "SecRoBERTa + GCN(SecRoBERTa)"
+      kind: fusion
+      members:
+        - {kind: embedding_store, embedder_id: hf_mean_pool-pt_SecRoBERTa, ref: latest, weight: 1.0}
+        - {kind: gcl_run, model_id: ent-g-srb-s43, ref: latest, weight: 0.25}
+    - method_id: ent-s-r3-s44
+      label: "SecRoBERTa + GCN(SecRoBERTa)"
+      kind: fusion
+      members:
+        - {kind: embedding_store, embedder_id: hf_mean_pool-pt_SecRoBERTa, ref: latest, weight: 1.0}
+        - {kind: gcl_run, model_id: ent-g-srb-s44, ref: latest, weight: 0.25}
+    - {method_id: ent-rand-s42, label: "Random ranking", kind: embedding_store, embedder_id: random-rand42, ref: latest}
+    - {method_id: ent-rand-s43, label: "Random ranking", kind: embedding_store, embedder_id: random-rand43, ref: latest}
+    - {method_id: ent-rand-s44, label: "Random ranking", kind: embedding_store, embedder_id: random-rand44, ref: latest}
+  evaluations:
+    - evaluation_id: gold_full
+      kind: gold_alignment
+      params: {ks: [1, 5, 10], split: test, modes: [global], sibling_filter_splits: [test]}
+    - evaluation_id: prf_full
+      kind: gold_alignment_prf
+      params: {split: test, assignment: greedy_one_to_one, top_k: 3, threshold: 0.0, biogitom_filters: false}
+    - evaluation_id: gold_pool
+      kind: gold_alignment
+      params: {ks: [1, 5, 10], split: test, modes: [global], sibling_filter_splits: [test], target_pool: data/processed/attack_cwe_ent/target_pool_union.json}
+    - evaluation_id: prf_pool
+      kind: gold_alignment_prf
+      params: {split: test, assignment: greedy_one_to_one, top_k: 3, threshold: 0.0, biogitom_filters: false, target_pool: data/processed/attack_cwe_ent/target_pool_union.json}

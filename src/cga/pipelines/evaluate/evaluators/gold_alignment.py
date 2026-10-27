@@ -35,6 +35,7 @@ import numpy as np
 
 from cga.core.errors import ConfigError
 from cga.pipelines.evaluate.evaluators import evaluators
+from cga.pipelines.evaluate.evaluators.target_pool import check_targets_in_pool, load_target_pool
 from cga.pipelines.evaluate.metrics import hit_at_k, mrr_via_argsort, top_k_by_similarity
 from cga.pipelines.evaluate.rows import MetricRow
 
@@ -69,6 +70,9 @@ class GoldAlignmentEvaluator:
         modes: Subset of ``["global", "candidates"]`` (default both).
         sibling_filter_splits: Splits whose gold pairs feed the ``global`` mode's "other gold
             targets" filter (default: all splits).
+        target_pool: Path of a pool file (``scripts/make_target_pool.py``); when set, ``graph_2``
+            candidates are restricted to the pool (default: off). A queried gold target outside the
+            pool raises ``ConfigError``.
     """
 
     def evaluate(self, res: Any, evaluation_id: str, params: dict[str, Any]) -> list[MetricRow]:
@@ -127,6 +131,11 @@ class GoldAlignmentEvaluator:
 
         role_of = res.graph_role_by_node
         pool_ids = sorted(n for n in shared if role_of.get(n) == _TARGET_ROLE)
+        target_pool_sha = None
+        if params.get("target_pool"):
+            pool_set, target_pool_sha = load_target_pool(params["target_pool"], evaluation_id=evaluation_id)
+            check_targets_in_pool({r["node_2_id"] for r in split_rows}, pool_set, evaluation_id=evaluation_id)
+            pool_ids = [n for n in pool_ids if n in pool_set]
         index_of = {nid: i for i, nid in enumerate(pool_ids)}
 
         # One query = one gold pair; dedupe so a repeated row counts once.
@@ -217,6 +226,8 @@ class GoldAlignmentEvaluator:
                 n_eligible_queries=n_queries,
                 n_dropped_missing_in_a_method=n_missing,
                 n_skipped_no_candidate_pool=n_no_pool,
+                target_pool_sha256=target_pool_sha,
+                n_target_pool=len(pool_ids) if target_pool_sha else None,
             )
         return rows
 

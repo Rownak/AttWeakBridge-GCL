@@ -80,12 +80,15 @@ ATTACK_ENT_SRB_ROWS = [
     ("ent-s-r2", "GCN(SecRoBERTa)", "SecRoBERTa top-k", "InfoNCE"),
     ("ent-s-r3", "SecRoBERTa + 0.25 x GCN(SecRoBERTa) (fusion)", "SecRoBERTa top-k", "InfoNCE"),
 ]
+# Sprint 10.6: both encoders and the random baseline, in one evaluate run with a full-CWE view and a shared-pool view.
+ATTACK_ENT_POOL_ROWS = ATTACK_ENT_ROWS + ATTACK_ENT_SRB_ROWS + [("ent-rand", "Random ranking", "–", "–")]
 ROW_SETS = {
     "matrix": PAPER_ROWS,
     "deepwalk": DEEPWALK_ROWS,
     "residual": RESIDUAL_ROWS,
     "attack_ent": ATTACK_ENT_ROWS,
     "attack_ent_srb": ATTACK_ENT_SRB_ROWS,
+    "attack_ent_pool": ATTACK_ENT_POOL_ROWS,
 }
 _COUNT_METRICS = {"n_predicted", "n_correct", "n_gold", "n_unique_sources", "n_unique_targets"}
 
@@ -309,7 +312,12 @@ def build_comparison(
 
 
 def build_source_report(
-    aggs: dict[str, pd.DataFrame], *, view: str = "global", rows: list[tuple[str, str, str, str]] | None = None
+    aggs: dict[str, pd.DataFrame],
+    *,
+    view: str = "global",
+    rows: list[tuple[str, str, str, str]] | None = None,
+    ranking_eval: str | None = None,
+    prf_eval: str | None = None,
 ) -> str:
     """Render the Sprint 10 report: one table per gold source and a compact MRR / F1 table (row x source).
 
@@ -320,6 +328,9 @@ def build_source_report(
         aggs: ``{source name: aggregate() output of that source's evaluate run}``.
         view: ``gold_alignment`` view for the ranking columns.
         rows: Row set (default :data:`ATTACK_ENT_ROWS`; Phase 10.5 passes :data:`ATTACK_ENT_SRB_ROWS`).
+        ranking_eval: ``gold_alignment`` evaluation id (default: the first one of each run; Phase 10.6 selects
+            ``gold_full`` or ``gold_pool``).
+        prf_eval: ``gold_alignment_prf`` evaluation id (default: the first one of each run).
 
     Returns:
         The Markdown text.
@@ -328,28 +339,66 @@ def build_source_report(
     parts: list[str] = []
     compact: dict[str, dict[str, str]] = {}
     for source, agg in aggs.items():
-        ranking_eval = _first_evaluation(agg, "gold_alignment", None)
-        prf_eval = _first_evaluation(agg, "gold_alignment_prf", None)
+        ranking_eval_s = _first_evaluation(agg, "gold_alignment", ranking_eval)
+        prf_eval_s = _first_evaluation(agg, "gold_alignment_prf", prf_eval)
         n_seeds = agg.groupby("method_group").n_seeds.max()
         body = []
         for key, variant, _, _ in rows or ATTACK_ENT_ROWS:
             if key not in set(agg.method_group):
                 continue
-            cells = [_cell(agg, key, ranking_eval, view, n, k) for _, n, k in _RANKING_COLUMNS]
-            cells += [_cell(agg, key, prf_eval, None, n, k) for _, n, k in _PRF_COLUMNS]
-            n_gold = _mean(agg, key, prf_eval, None, "n_gold", None)
-            n_src = _mean(agg, key, prf_eval, None, "n_unique_sources", None)
+            cells = [_cell(agg, key, ranking_eval_s, view, n, k) for _, n, k in _RANKING_COLUMNS]
+            cells += [_cell(agg, key, prf_eval_s, None, n, k) for _, n, k in _PRF_COLUMNS]
+            n_gold = _mean(agg, key, prf_eval_s, None, "n_gold", None)
+            n_src = _mean(agg, key, prf_eval_s, None, "n_unique_sources", None)
             cells.append(MISSING if n_gold is None else f"{n_gold:.0f}")
             cells.append(MISSING if not n_gold or n_src is None else f"{n_src / n_gold:.4f}")
             body.append([variant, str(int(n_seeds[key]))] + cells)
-            mrr = _cell(agg, key, ranking_eval, view, "mrr", None)
-            f1 = _cell(agg, key, prf_eval, None, "f1", None)
+            mrr = _cell(agg, key, ranking_eval_s, view, "mrr", None)
+            f1 = _cell(agg, key, prf_eval_s, None, "f1", None)
             compact.setdefault(variant, {})[source] = f"{mrr} / {f1}"
         parts += [f"## Gold source `{source}`", "", _markdown_table(header, body), ""]
     sources = list(aggs)
     rows = [[v] + [compact[v].get(s, MISSING) for s in sources] for v in compact]
     parts += ["## MRR / F1 per row and gold source", "", _markdown_table(["Row"] + sources, rows), ""]
     return "\n".join(parts)
+
+
+def build_lift_table(
+    aggs: dict[str, pd.DataFrame],
+    *,
+    ranking_eval: str,
+    random_group: str = "ent-rand",
+    view: str = "global",
+    rows: list[tuple[str, str, str, str]] | None = None,
+) -> str:
+    """Render each row's MRR divided by the random-ranking MRR of the same evaluation (same pool), per gold source.
+
+    Args:
+        aggs: ``{source: aggregate()}`` of the evaluate runs.
+        ranking_eval: ``gold_alignment`` evaluation id (``gold_full`` or ``gold_pool``).
+        random_group: Method group of the random baseline.
+        view: ``gold_alignment`` view.
+        rows: Row set (default :data:`ATTACK_ENT_POOL_ROWS`); the random row itself is shown as its MRR.
+
+    Returns:
+        The Markdown table: MRR (seed mean) and ``MRR / random MRR`` per source.
+    """
+    sources = list(aggs)
+    header = ["Row"] + [f"{s} MRR (x random)" for s in sources]
+    body = []
+    for key, variant, _, _ in rows or ATTACK_ENT_POOL_ROWS:
+        cells = [variant]
+        for source in sources:
+            value = _mean(aggs[source], key, ranking_eval, view, "mrr", None)
+            base = _mean(aggs[source], random_group, ranking_eval, view, "mrr", None)
+            if value is None or base is None:
+                cells.append(MISSING)
+            elif key == random_group:
+                cells.append(f"{value:.4f}")
+            else:
+                cells.append(f"{value:.4f} ({value / base:.1f}x)")
+        body.append(cells)
+    return _markdown_table(header, body)
 
 
 def build_encoder_comparison(
@@ -406,6 +455,8 @@ def main() -> None:
     ap.add_argument("--text-label", default="BERT", help="encoder name in the paper-table row labels")
     ap.add_argument("--source-run", action="append", default=[], metavar="NAME=RUN",
                     help="Sprint 10: gold source name and its evaluate run; repeat once per source (writes sources_summary.md)")
+    ap.add_argument("--lift", action="store_true", help="Sprint 10.6: add the MRR / random-MRR table (needs --ranking-eval)")
+    ap.add_argument("--out-name", default="sources_summary.md", help="file name written with --source-run")
     ap.add_argument("--compare-source-run", action="append", default=[], metavar="NAME=RUN",
                     help="Sprint 10.5: the other encoder's evaluate run per source (10.4 runs); needs --source-run")
     ap.add_argument("--compare-rows", default="attack_ent", choices=list(ROW_SETS), help="row set of the --compare-source-run runs")
@@ -417,8 +468,17 @@ def main() -> None:
     if args.source_run:
         pairs = [a.split("=", 1) for a in args.source_run]
         aggs = {n: aggregate(pd.read_parquet(Path(args.root) / args.dataset / r / "metrics.parquet")) for n, r in pairs}
-        out = Path(args.root) / args.dataset / args.run / "sources_summary.md"
-        text = build_source_report(aggs, view=args.view, rows=ROW_SETS[args.rows])
+        out = Path(args.root) / args.dataset / args.run / args.out_name
+        text = build_source_report(
+            aggs, view=args.view, rows=ROW_SETS[args.rows], ranking_eval=args.ranking_eval, prf_eval=args.prf_eval
+        )
+        if args.lift:
+            lift_eval = args.ranking_eval or _first_evaluation(next(iter(aggs.values())), "gold_alignment", None)
+            text += (
+                f"\n## MRR and lift over the random baseline (`{lift_eval}`)\n\n"
+                + build_lift_table(aggs, ranking_eval=lift_eval, view=args.view)
+                + "\n"
+            )
         if args.compare_source_run:
             other = {
                 n: aggregate(pd.read_parquet(Path(args.root) / args.dataset / r / "metrics.parquet"))

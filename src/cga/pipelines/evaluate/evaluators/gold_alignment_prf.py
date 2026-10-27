@@ -32,6 +32,7 @@ import numpy as np
 from cga.core.errors import ConfigError
 from cga.pipelines.evaluate.evaluators import evaluators
 from cga.pipelines.evaluate.evaluators.gold_alignment import _alignment_rows, _normalize
+from cga.pipelines.evaluate.evaluators.target_pool import check_targets_in_pool, load_target_pool
 from cga.pipelines.evaluate.rows import MetricRow
 
 _ASSIGNMENTS = ("greedy_one_to_one", "top1")
@@ -133,6 +134,8 @@ class GoldAlignmentPRFEvaluator:
         threshold: Minimum cosine for a prediction (default 0.0).
         biogitom_filters: Apply the train-only-endpoint and split-source filters (default false).
         assignment: ``greedy_one_to_one`` (default) or ``top1``.
+        target_pool: Path of a pool file (``scripts/make_target_pool.py``); when set, candidates are
+            restricted to the pool (default: off). A gold target outside the pool raises ``ConfigError``.
     """
 
     def evaluate(self, res: Any, evaluation_id: str, params: dict[str, Any]) -> list[MetricRow]:
@@ -173,6 +176,11 @@ class GoldAlignmentPRFEvaluator:
                 f"gold_alignment_prf evaluation '{evaluation_id}': no '{split}' alignment pairs "
                 "(does the dataset config enable `alignments`?)"
             )
+        target_pool: set[str] | None = None
+        target_pool_sha = None
+        if params.get("target_pool"):
+            target_pool, target_pool_sha = load_target_pool(params["target_pool"], evaluation_id=evaluation_id)
+            check_targets_in_pool({t for _, t in gold}, target_pool, evaluation_id=evaluation_id)
         split_sources = {s for s, _ in gold}
         split_nodes = {n for pair in gold for n in pair}
         excluded = train_nodes - split_nodes
@@ -185,6 +193,8 @@ class GoldAlignmentPRFEvaluator:
             spec = res.method_specs[method_id]
             have = set(matrix.node_ids)
             pool_ids = sorted(n for n in have if role_of.get(n) == _TARGET_ROLE)
+            if target_pool is not None:
+                pool_ids = [n for n in pool_ids if n in target_pool]
             sources = sorted(s for s in split_sources if s in have and role_of.get(s) == _SOURCE_ROLE)
             candidates = top_k_candidates(
                 matrix.select(sources).vectors, matrix.select(pool_ids).vectors, sources, pool_ids, top_k
@@ -223,5 +233,7 @@ class GoldAlignmentPRFEvaluator:
             threshold=threshold,
             biogitom_filters=filters,
             n_excluded_train_only_nodes=len(excluded),
+            target_pool_sha256=target_pool_sha,
+            n_target_pool=len(target_pool) if target_pool is not None else None,
         )
         return rows

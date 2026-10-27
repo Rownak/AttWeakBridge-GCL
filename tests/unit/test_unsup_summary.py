@@ -166,3 +166,19 @@ def test_encoder_comparison_matches_rows_by_position_and_gives_the_difference():
         rows=(unsup_summary.ATTACK_ENT_ROWS, unsup_summary.ATTACK_ENT_SRB_ROWS),
     )
     assert "| 0.0100 | 0.0300 | +0.0200 | 0.0020 | 0.0010 | -0.0010 |" in text
+
+
+def test_lift_table_divides_by_the_random_mrr_and_selects_the_evaluation():
+    def frame(rand_pool, enc_pool):
+        rows = []
+        for ev, rand, enc in (("gold_full", 0.007, 0.02), ("gold_pool", rand_pool, enc_pool)):
+            for seed in (42, 43):
+                rows.append(_row(f"ent-rand-s{seed}", ev, "gold_alignment", "mrr", rand))
+                rows.append(_row(f"ent-r2-s{seed}", ev, "gold_alignment", "mrr", enc))
+        return unsup_summary.aggregate(pd.DataFrame(rows))
+
+    aggs = {"stix": frame(0.04, 0.08)}
+    text = unsup_summary.build_lift_table(aggs, ranking_eval="gold_pool")
+    assert "0.0800 (2.0x)" in text and "| Random ranking | 0.0400 |" in text
+    report = unsup_summary.build_source_report(aggs, ranking_eval="gold_pool", rows=unsup_summary.ATTACK_ENT_POOL_ROWS)
+    assert "0.0800" in report and "0.0200" not in report  # the pool view, not the full view
