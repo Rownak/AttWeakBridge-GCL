@@ -1,0 +1,12 @@
+# Sprint 11.10: BAAI/bge-base-en-v1.5 on the description-only text, chunked (see embed_mpnet_chunk.yaml).
+# Usage: cga run embed --dataset attack_cwe_ent --config configs/pipelines/embed_bge_chunk.yaml --set device=cuda
+embed:
+  inputs:
+    ingest_run: latest
+    text_variant: description_only
+  embedder:
+    kind: sentence_transformer
+    model_ref: BAAI/bge-base-en-v1.5
+    label: bge_base_en_v1_5_chunk_desc
+    chunking: true
+    batch_size: 32

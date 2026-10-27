@@ -245,3 +245,68 @@ def test_embed_pipeline_deepwalk_skips_isolated_node(tmp_path):
     assert status_by_node["attack:1"] == "ok"
     assert status_by_node["attack:2"] == "ok"
     assert status_by_node["attack:3"] == "skipped"
+
+
+class _FakeBatchEmbedder(_FakeEmbedder):
+    """Batch-capable stand-in for SentenceTransformerEmbedder; records the batches it saw."""
+
+    batches: list[list[str]] = []
+    fail_batches = False
+
+    def __init__(self, **kwargs):
+        super().__init__()
+        type(self).batches = []
+        type(self).kwargs = kwargs
+
+    def embed_batch(self, texts):
+        type(self).batches.append(list(texts))
+        if type(self).fail_batches:
+            raise RuntimeError("batch boom")
+        return [self.embed(t) for t in texts]
+
+
+def _run_sentence_transformer(tmp_path, monkeypatch, *, fail_batches, batch_size):
+    _FakeBatchEmbedder.fail_batches = fail_batches
+    monkeypatch.setattr("cga.pipelines.embed.pipeline.SentenceTransformerEmbedder", _FakeBatchEmbedder)
+    config = _build_config(tmp_path)
+    config["embed"]["embedder"] = {
+        "kind": "sentence_transformer",
+        "model_ref": "fake/st",
+        "label": "fake_st",
+        "batch_size": batch_size,
+    }
+    ingest_run_dir = Path(config["paths"]["processed"]) / "attack_cwe" / "20260101T000000Z-aaaaaaaa"
+    _write_ingest_run(ingest_run_dir, texts={"attack:1": "hello world", "attack:2": "", "attack:3": "text"})
+    return _run_embed(config, tmp_path)
+
+
+def test_embed_pipeline_sentence_transformer_batches_texts_and_skips_empty(tmp_path, monkeypatch):
+    ctx = _run_sentence_transformer(tmp_path, monkeypatch, fail_batches=False, batch_size=2)
+
+    assert ctx.manifest.status == "success"
+    assert _FakeBatchEmbedder.batches == [["hello world", "text"]]  # empty text is never sent to the model
+    matrix = AlignedMatrix.load(ctx.run_dir)
+    assert matrix.node_ids == ["attack:1", "attack:3"]
+    assert build_embedder_id({"kind": "sentence_transformer", "model_ref": "x", "label": "fake_st"}) == "sentence_transformer-fake_st"
+
+
+def test_embed_pipeline_chunking_is_on_only_for_boolean_true(tmp_path, monkeypatch):
+    """The legacy string ``chunking: fixed`` (base embed.yaml, hf_mean_pool) must not turn chunking on."""
+    chunked = {}
+    for value in ("fixed", False, True):
+        monkeypatch.setattr("cga.pipelines.embed.pipeline.SentenceTransformerEmbedder", _FakeBatchEmbedder)
+        config = _build_config(tmp_path / str(value))
+        config["embed"]["embedder"] = {"kind": "sentence_transformer", "model_ref": "x", "label": "st", "chunking": value}
+        ingest_run_dir = Path(config["paths"]["processed"]) / "attack_cwe" / "20260101T000000Z-aaaaaaaa"
+        _write_ingest_run(ingest_run_dir, texts={"attack:1": "hello", "attack:2": "", "attack:3": "text"})
+        _run_embed(config, tmp_path / str(value))
+        chunked[value] = _FakeBatchEmbedder.kwargs["chunking"]
+
+    assert chunked == {"fixed": False, False: False, True: True}
+
+
+def test_embed_pipeline_sentence_transformer_falls_back_to_per_node_when_a_batch_fails(tmp_path, monkeypatch):
+    ctx = _run_sentence_transformer(tmp_path, monkeypatch, fail_batches=True, batch_size=2)
+
+    assert ctx.manifest.status == "success"
+    assert read_json(ctx.run_dir / "stats.json")["n_ok"] == 2  # per-node embed() still succeeded

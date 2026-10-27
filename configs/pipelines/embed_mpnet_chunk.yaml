@@ -1,0 +1,13 @@
+# Sprint 11.10: multi-qa-mpnet-base-dot-v1 on the description-only text, whole text embedded as token-weighted chunk vectors
+# (no truncation at 512 tokens). Compare embed_mpnet.yaml (truncating).
+# Usage: cga run embed --dataset attack_cwe_ent --config configs/pipelines/embed_mpnet_chunk.yaml --set device=cuda
+embed:
+  inputs:
+    ingest_run: latest
+    text_variant: description_only
+  embedder:
+    kind: sentence_transformer
+    model_ref: sentence-transformers/multi-qa-mpnet-base-dot-v1
+    label: multi_qa_mpnet_dot_chunk_desc
+    chunking: true
+    batch_size: 32

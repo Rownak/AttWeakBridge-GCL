@@ -1,0 +1,13 @@
+# Sentence-encoder variant for BAAI/bge-base-en-v1.5 (Sprint 11.9, second encoder); same shape as embed_mpnet.yaml.
+# Both sides are encoded the same way, with no retrieval instruction prefix, as for mpnet. Vectors are stored as the model emits them.
+# Usage: cga run embed --dataset attack_cwe_ent --config configs/pipelines/embed_bge.yaml --set device=cuda
+embed:
+  inputs:
+    ingest_run: latest
+    text_variant: description
+  embedder:
+    kind: sentence_transformer
+    model_ref: BAAI/bge-base-en-v1.5
+    label: bge_base_en_v1_5
+    chunking: false                 # explicit: the base embed.yaml has the legacy string `chunking: fixed`
+    batch_size: 32

@@ -1,0 +1,35 @@
+# Sprint 11 Phase 11.10 -- description-only texts and chunked sentence embeddings. New stores (`description_only` text) next to the 11.9
+# stores (`description` text: CWE name + description + extended description, truncated at 512 tokens) and random. Same six evaluations as 11.9.
+#   uv run cga run evaluate --dataset attack_cwe_ent --experiment attack_cwe_ent_desc_eval #       --set evaluate.inputs.ingest_run=<11.10 ingest run of that source>
+# All stores are pinned by run id. Cosine only.
+evaluate:
+  methods:
+    - {method_id: ent-mpnet-chunk, label: "mpnet, chunked (description only)", kind: embedding_store, embedder_id: sentence_transformer-multi_qa_mpnet_dot_chunk_desc, ref: 20261027T194928Z-8cf38e55}
+    - {method_id: ent-bge-chunk, label: "bge-base, chunked (description only)", kind: embedding_store, embedder_id: sentence_transformer-bge_base_en_v1_5_chunk_desc, ref: 20261027T195544Z-b50c75b4}
+    - {method_id: ent-mpnet-trunc, label: "mpnet, truncated (description only)", kind: embedding_store, embedder_id: sentence_transformer-multi_qa_mpnet_dot_trunc_desc, ref: 20261027T202343Z-1fe4eb2c}
+    - {method_id: ent-srb-new, label: "SecRoBERTa (description only)", kind: embedding_store, embedder_id: hf_mean_pool-pt_SecRoBERTa_desc, ref: 20261027T200841Z-09088f9f}
+    - {method_id: ent-mpnet, label: "mpnet, truncated (11.9 text)", kind: embedding_store, embedder_id: sentence_transformer-multi_qa_mpnet_dot, ref: 20261027T183826Z-2cd26dca}
+    - {method_id: ent-bge, label: "bge-base, truncated (11.9 text)", kind: embedding_store, embedder_id: sentence_transformer-bge_base_en_v1_5, ref: 20261027T190733Z-d71a74dc}
+    - {method_id: ent-s-r1, label: "SecRoBERTa (11.9 text)", kind: embedding_store, embedder_id: hf_mean_pool-pt_SecRoBERTa, ref: 20261027T134403Z-8bc08adc}
+    - {method_id: ent-rand-s42, label: "Random ranking", kind: embedding_store, embedder_id: random-rand42, ref: latest}
+    - {method_id: ent-rand-s43, label: "Random ranking", kind: embedding_store, embedder_id: random-rand43, ref: latest}
+    - {method_id: ent-rand-s44, label: "Random ranking", kind: embedding_store, embedder_id: random-rand44, ref: latest}
+  evaluations:
+    - evaluation_id: gold_full
+      kind: gold_alignment
+      params: {ks: [1, 5, 10], split: test, modes: [global], sibling_filter_splits: [test]}
+    - evaluation_id: prf_full
+      kind: gold_alignment_prf
+      params: {split: test, assignment: greedy_one_to_one, top_k: 3, threshold: 0.0, biogitom_filters: false}
+    - evaluation_id: gold_pool
+      kind: gold_alignment
+      params: {ks: [1, 5, 10], split: test, modes: [global], sibling_filter_splits: [test], target_pool: data/processed/attack_cwe_ent/target_pool_union.json}
+    - evaluation_id: prf_pool
+      kind: gold_alignment_prf
+      params: {split: test, assignment: greedy_one_to_one, top_k: 3, threshold: 0.0, biogitom_filters: false, target_pool: data/processed/attack_cwe_ent/target_pool_union.json}
+    - evaluation_id: set_full
+      kind: gold_set_retrieval
+      params: {ks: [1, 5, 10, 15, 20, 50], split: test}
+    - evaluation_id: set_pool
+      kind: gold_set_retrieval
+      params: {ks: [1, 5, 10, 15, 20, 50], split: test, target_pool: data/processed/attack_cwe_ent/target_pool_union.json}

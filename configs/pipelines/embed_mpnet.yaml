@@ -1,0 +1,13 @@
+# Sentence-encoder variant of configs/pipelines/embed.yaml (Sprint 11.9): one vector per text, no token mean-pooling or chunking.
+# Texts longer than the model's max_seq_length are truncated by the model. Vectors are stored un-normalised.
+# Usage: cga run embed --dataset attack_cwe_ent --config configs/pipelines/embed_mpnet.yaml --set device=cuda
+embed:
+  inputs:
+    ingest_run: latest
+    text_variant: description
+  embedder:
+    kind: sentence_transformer
+    model_ref: sentence-transformers/multi-qa-mpnet-base-dot-v1
+    label: multi_qa_mpnet_dot
+    chunking: false                 # explicit: the base embed.yaml has the legacy string `chunking: fixed`
+    batch_size: 32                  # fixed and logged: batch padding changes vectors only at float level

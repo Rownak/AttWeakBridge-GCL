@@ -25,10 +25,10 @@ from cga.core.run import RunContext
 from cga.data.embedding_store import EmbeddingStore
 from cga.data.graph_store import read_edges, read_nodes, read_texts
 from cga.pipelines.embed.graph_embedders import build_graph, deepwalk_embed, node2vec_embed
-from cga.pipelines.embed.text_embedders import HfMeanPoolEmbedder
+from cga.pipelines.embed.text_embedders import HfMeanPoolEmbedder, SentenceTransformerEmbedder
 
 _GRAPH_KINDS = {"deepwalk", "node2vec"}
-_TEXT_KINDS = {"hf_mean_pool"}
+_TEXT_KINDS = {"hf_mean_pool", "sentence_transformer"}
 
 
 def slugify(value: str) -> str:
@@ -111,7 +111,7 @@ class GenerateStep:
         elif kind in _GRAPH_KINDS:
             self._generate_graph(ctx, store, embedder_cfg, ingest_dir, all_node_ids, pending, kind, on_error)
         else:
-            raise ConfigError(f"Unknown embedder.kind '{kind}'; expected one of hf_mean_pool, deepwalk, node2vec")
+            raise ConfigError(f"Unknown embedder.kind '{kind}'; expected one of hf_mean_pool, sentence_transformer, deepwalk, node2vec")
 
     def _generate_text(
         self,
@@ -125,37 +125,59 @@ class GenerateStep:
         text_variant = ctx.config["embed"]["inputs"].get("text_variant", "description")
         texts_by_node = _load_texts_by_node(ingest_dir, text_variant)
 
-        embedder = HfMeanPoolEmbedder(
-            model_ref=embedder_cfg["model_ref"],
-            max_length=embedder_cfg.get("max_length", 512),
-            add_special_tokens=embedder_cfg.get("add_special_tokens", False),
-            device=ctx.device,
-        )
+        if embedder_cfg["kind"] == "sentence_transformer":
+            embedder: Any = SentenceTransformerEmbedder(
+                model_ref=embedder_cfg["model_ref"],
+                batch_size=embedder_cfg.get("batch_size", 32),
+                device=ctx.device,
+                # ``is True``: the base embed.yaml carries the legacy string ``chunking: fixed`` for hf_mean_pool,
+                # which must not switch this embedder to chunked mode.
+                chunking=embedder_cfg.get("chunking") is True,
+            )
+            # Batching is what makes the GPU worth using; the per-node path below stays the fallback.
+            batch_size = max(1, int(embedder_cfg.get("batch_size", 32)))
+        else:
+            embedder = HfMeanPoolEmbedder(
+                model_ref=embedder_cfg["model_ref"],
+                max_length=embedder_cfg.get("max_length", 512),
+                add_special_tokens=embedder_cfg.get("add_special_tokens", False),
+                device=ctx.device,
+            )
+            batch_size = 1
 
+        todo: list[tuple[str, str]] = []
         for node_id in pending:
             text = texts_by_node.get(node_id)
             if text is None:
                 store.upsert_status(node_id, "missing_text")
                 self._state.n_missing_text += 1
-                continue
-            if not text:
+            elif not text:
                 store.upsert_status(node_id, "empty_text")
                 self._state.n_empty_text += 1
-                continue
+            else:
+                todo.append((node_id, text))
 
-            input_sha256 = None
+        for start in range(0, len(todo), batch_size):
+            batch = todo[start : start + batch_size]
+            results: list[tuple[list[float], int] | None]
             try:
-                vector, n_chunks = embedder.embed(text)
-                input_sha256 = _sha256_text(text)
-                store.append_shard(node_id, vector, input_sha256=input_sha256, n_chunks=n_chunks)
-                store.upsert_status(node_id, "ok", input_sha256=input_sha256, n_chunks=n_chunks)
-                self._state.n_ok += 1
-            except Exception as exc:  # noqa: BLE001 - per-node isolation is the point
-                if on_error == "abort":
-                    raise
-                ctx.logger.warning("generate: node '%s' failed: %s", node_id, exc)
-                store.upsert_status(node_id, "failed", error=str(exc), input_sha256=input_sha256)
-                self._state.n_failed += 1
+                results = list(embedder.embed_batch([t for _, t in batch])) if batch_size > 1 else [None]
+            except Exception:  # noqa: BLE001 - retry node by node so one bad text cannot fail its batch
+                results = [None] * len(batch)
+            for (node_id, text), result in zip(batch, results, strict=True):
+                input_sha256 = None
+                try:
+                    vector, n_chunks = result if result is not None else embedder.embed(text)
+                    input_sha256 = _sha256_text(text)
+                    store.append_shard(node_id, vector, input_sha256=input_sha256, n_chunks=n_chunks)
+                    store.upsert_status(node_id, "ok", input_sha256=input_sha256, n_chunks=n_chunks)
+                    self._state.n_ok += 1
+                except Exception as exc:  # noqa: BLE001 - per-node isolation is the point
+                    if on_error == "abort":
+                        raise
+                    ctx.logger.warning("generate: node '%s' failed: %s", node_id, exc)
+                    store.upsert_status(node_id, "failed", error=str(exc), input_sha256=input_sha256)
+                    self._state.n_failed += 1
 
     def _generate_graph(
         self,

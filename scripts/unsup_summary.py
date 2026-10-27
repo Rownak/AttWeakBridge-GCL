@@ -98,6 +98,45 @@ ATTACK_ENT_SET_ROWS = [
     ("ent-s-r1-old", "SecRoBERTa (frozen, pre-fix texts)", "–", "–"),
     ("ent-rand", "Random ranking", "–", "–"),
 ]
+# Sprint 11.9: controlled text-encoder baseline, frozen mpnet (sentence encoder) against frozen SecRoBERTa and random.
+ATTACK_ENT_MPNET_ROWS = [
+    ("ent-mpnet", "mpnet (frozen)", "–", "–"),
+    ("ent-s-r1", "SecRoBERTa (frozen)", "–", "–"),
+    ("ent-rand", "Random ranking", "–", "–"),
+]
+# Sprint 11.9 (second encoder): frozen bge-base next to mpnet, SecRoBERTa and random.
+ATTACK_ENT_ENCODERS_ROWS = [
+    ("ent-bge", "bge-base (frozen)", "–", "–"),
+    ("ent-mpnet", "mpnet (frozen)", "–", "–"),
+    ("ent-s-r1", "SecRoBERTa (frozen)", "–", "–"),
+    ("ent-rand", "Random ranking", "–", "–"),
+]
+# Sprint 11.10: description-only texts. New stores (chunked sentence encoders, truncated mpnet, SecRoBERTa on the new text) next to the
+# 11.9 stores on the `description` text and random.
+ATTACK_ENT_DESC_ROWS = [
+    ("ent-mpnet-chunk", "mpnet, chunked (description only)", "–", "–"),
+    ("ent-bge-chunk", "bge-base, chunked (description only)", "–", "–"),
+    ("ent-mpnet-trunc", "mpnet, truncated (description only)", "–", "–"),
+    ("ent-srb-new", "SecRoBERTa (description only)", "–", "–"),
+    ("ent-mpnet", "mpnet, truncated (11.9 text)", "–", "–"),
+    ("ent-bge", "bge-base, truncated (11.9 text)", "–", "–"),
+    ("ent-s-r1", "SecRoBERTa (11.9 text)", "–", "–"),
+    ("ent-rand", "Random ranking", "–", "–"),
+]
+# Sprint 11.11: dual-encoder GCNs on chunked mpnet text vectors, the same-text SecRoBERTa control (description only) and the 11.6 SecRoBERTa duals
+# (older `description` text) as references.
+ATTACK_ENT_MPNET_DUAL_ROWS = [
+    ("ent-mpnet-chunk", "mpnet, chunked (frozen)", "–", "–"),
+    ("ent-d-mpnetc-trip", "Dual GCN, mpnet chunked, triplet", "mpnet top-k", "Triplet"),
+    ("ent-d-mpnetc-nce", "Dual GCN, mpnet chunked, InfoNCE", "mpnet top-k", "InfoNCE"),
+    ("ent-srb-new", "SecRoBERTa, description only (frozen)", "–", "–"),
+    ("ent-d-srbd-trip", "Dual GCN, SecRoBERTa description only, triplet", "SecRoBERTa top-k", "Triplet"),
+    ("ent-d-srbd-nce", "Dual GCN, SecRoBERTa description only, InfoNCE", "SecRoBERTa top-k", "InfoNCE"),
+    ("ent-s-r1", "SecRoBERTa (frozen, 11.9 text)", "–", "–"),
+    ("ent-d-trip", "Dual GCN, SecRoBERTa 11.9 text, triplet", "SecRoBERTa top-k", "Triplet"),
+    ("ent-d-nce", "Dual GCN, SecRoBERTa 11.9 text, InfoNCE", "SecRoBERTa top-k", "InfoNCE"),
+    ("ent-rand", "Random ranking", "–", "–"),
+]
 ROW_SETS = {
     "matrix": PAPER_ROWS,
     "deepwalk": DEEPWALK_ROWS,
@@ -107,6 +146,10 @@ ROW_SETS = {
     "attack_ent_pool": ATTACK_ENT_POOL_ROWS,
     "attack_ent_dual": ATTACK_ENT_DUAL_ROWS,
     "attack_ent_set": ATTACK_ENT_SET_ROWS,
+    "attack_ent_mpnet": ATTACK_ENT_MPNET_ROWS,
+    "attack_ent_encoders": ATTACK_ENT_ENCODERS_ROWS,
+    "attack_ent_desc": ATTACK_ENT_DESC_ROWS,
+    "attack_ent_mpnet_dual": ATTACK_ENT_MPNET_DUAL_ROWS,
 }
 _COUNT_METRICS = {"n_predicted", "n_correct", "n_gold", "n_unique_sources", "n_unique_targets"}
 

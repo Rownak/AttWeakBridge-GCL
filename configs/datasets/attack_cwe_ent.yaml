@@ -19,6 +19,8 @@ dataset:
   text_variants:
     description:   {attack: [description],
                     cwe: [name, description, extended_description]}
+    # Sprint 11.10: the standard description field only (no CWE name, no extended description).
+    description_only: {attack: [description], cwe: [description]}
     full_metadata: {attack: [description, detection],
                     cwe: [name, description, extended_description, modes_of_introduction,
                           common_consequences, detection_methods, potential_mitigations,
