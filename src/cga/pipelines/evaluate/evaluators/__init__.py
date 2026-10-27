@@ -47,5 +47,6 @@ from cga.pipelines.evaluate.evaluators import (  # noqa: E402,F401
     gold_alignment,
     gold_alignment_prf,
     gold_alignment_rerank,
+    gold_set_retrieval,
     neighborhood,
 )

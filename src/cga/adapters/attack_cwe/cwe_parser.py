@@ -78,11 +78,27 @@ def _joined_paragraphs(parent: ET.Element | None, tag: str) -> str | None:
 
 
 def _flatten_block(weakness: ET.Element, tag: str) -> str:
-    """Flatten a ``tag`` sub-element: ``xhtml:p`` children joined, else its own text."""
-    joined = _joined_paragraphs(weakness, tag)
-    if joined is not None:
-        return joined
-    return _text_or_default(weakness.find(f".//cwe:{tag}", _NS))
+    """Flatten the weakness's own direct-child ``tag`` element.
+
+    Only direct children are read: a descendant search (``.//``) also matches the ``Description``
+    elements nested in ``Detection_Method`` and ``Mitigation``, which then replace a plain-text
+    weakness description (241 of 969 CWEs in v4.20).
+
+    Args:
+        weakness: A ``Weakness`` element.
+        tag: ``Description`` or ``Extended_Description``.
+
+    Returns:
+        ``xhtml:p`` children joined, else the element's whitespace-normalised text, else ``"N/A"``.
+    """
+    block = weakness.find(f"cwe:{tag}", _NS)
+    if block is None:
+        return "N/A"
+    paragraphs = block.findall("xhtml:p", _NS)
+    if paragraphs:
+        return "".join(ET.tostring(e, encoding="unicode", method="text").strip() for e in paragraphs)
+    text = " ".join("".join(block.itertext()).split())
+    return text or "N/A"
 
 
 def _parse_modes_of_introduction(weakness: ET.Element) -> str:

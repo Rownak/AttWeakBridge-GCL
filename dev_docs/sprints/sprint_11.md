@@ -119,8 +119,86 @@ No fusion row and no new seeds: the sprint keeps the minimum variation, so the d
 - [x] Append the 11.4 results to `dev_docs/execution_logs/sprint_11.md`: evaluate run ids, tables, reproduction and repeat checks, commands, limits.
 - [x] Mark the 11.4 checkboxes.
 
+## Phase 11.6: Fix the CWE description bug, re-ingest, re-embed
+
+Bug (see `dev_docs/data_analysis/attack_capec_cwe_gold_alignment_analysis.md` §6): `cwe_parser._flatten_block(weakness, "Description")` searches `.//cwe:Description/xhtml:p`, so nested `Detection_Method` / `Mitigation` descriptions replace the weakness's own plain-text `<Description>`. 241 of 969 CWEs are affected, including 53 of the 151 gold CWEs (43–46% of gold pairs). Every Sprint 10/11 store and model on `attack_cwe_ent` is built on these texts.
+
+- [x] **Fix** `src/cga/adapters/attack_cwe/cwe_parser.py`: read only the direct child (`weakness.find("cwe:Description", _NS)`, flattened with `itertext()` and whitespace-normalised). Do the same for `Extended_Description`. Leave the nested-field parsers (detection, mitigations, examples) unchanged.
+- [x] **Unit tests** in `tests/unit/adapters/test_cwe_parser.py`: (a) a weakness whose `<Description>` is plain text and whose `Mitigation/Description` has `xhtml:p` children keeps its own description; (b) an `xhtml:p` description is still flattened; (c) a weakness with no `<Description>` gives `N/A`. `uv run pytest tests/unit -q` green.
+- [x] **Audit** on `cwec_v4.20.xml`: 0 of 969 CWEs whose `description` differs from the direct-child `<Description>` (it was 241). Spot-check CWE-284, CWE-120, CWE-732 and CWE-200.
+- [x] **Re-ingest** all four gold sources (same command as Sprint 10.1; `union` last so it is `LATEST`):
+  ```
+  for k in stix capec intersection union; do
+    uv run cga run ingest --dataset attack_cwe_ent --set ingest.split.fractions=[1.0,0.0,0.0] \
+      --set dataset.alignments.equivalence.source=$k
+  done
+  ```
+  Check: node, edge and gold-pair counts are equal to the Sprint 10.1 ingests (287 / 566 / 221 / 628 pairs). Only `texts.parquet` should change, for the affected CWEs only.
+- [x] **Re-embed** from the new union ingest:
+  ```
+  uv run cga run embed --dataset attack_cwe_ent --set embed.embedder.kind=hf_mean_pool \
+    --set embed.embedder.model_ref=jackaduma/SecRoBERTa --set embed.embedder.label=pt_SecRoBERTa \
+    --set embed.inputs.text_variant=description
+  uv run cga run embed --dataset attack_cwe_ent --config configs/pipelines/embed_deepwalk.yaml
+  ```
+  DeepWalk does not read text; rerun it only so every store points at the same ingest run. Check: 5,131 SecRoBERTa vectors, and the ATT&CK vectors are identical to the old store (their texts did not change).
+- [x] **Random stores and pool file:** keep `random-rand42/43/44` and `target_pool_union.json` unless the node set or the union gold changed. Re-check the pool with `scripts/make_target_pool.py --check`.
+- [x] **Seeding** (Sprint 11.2 open item): call `cga.core.seeds.seed_everything(seed)` at the start of `gcl_train`. Then a rerun with the same seed must give identical node embeddings.
+- [x] **Retrain** on the new stores, as in 11.1 / 11.2: `training_data` with sampler id `s11b-rank_topk-k5`, then `gcl_train` with model ids `ent-dual-gcn-triplet-s42b` and `ent-dual-gcn-infonce-s42b`. Rerun one model to confirm the embeddings are identical.
+- [x] **Hubness check** (frozen SecRoBERTa, union, full view): how many times CWE-120 and CWE-732 appear in the techniques' top-3 lists, before (77 and 34) and after the fix.
+
+| Gate | Go if | Else |
+|---|---|---|
+| 11.6 | Audit is 0; ingest counts unchanged; tests green; retrained models are deterministic | Fix before 11.7 |
+
+## Phase 11.7: Set-based gold evaluation (Hits@k, Recall@k, Precision@k)
+
+The gold gives each technique an **unordered set** of correct CWEs (1–23, median 1–2). So the query unit is the **technique**, not the gold pair, and only order-free top-k metrics are used.
+
+For technique `t` with gold set `R_t`, and `L_t@k` = the method's top-k CWEs (cosine, ties broken by node id):
+
+| Metric | Per technique | Meaning |
+|---|---|---|
+| Hits@k | 1 if `L_t@k ∩ R_t ≠ ∅` | at least one correct CWE in the top k |
+| Recall@k | `|L_t@k ∩ R_t| / |R_t|` | share of the technique's CWEs found |
+| Precision@k | `|L_t@k ∩ R_t| / k` | share of the top k that is correct |
+| P@k ceiling | `min(|R_t|, k) / k` | best possible Precision@k for that technique |
+
+All four are macro-averaged over techniques. Use `k ∈ {1, 5, 10, 15, 20}`.
+
+Precision@k is capped by `|R_t|`: a technique with 1 gold CWE can reach at most 0.067 at k = 15. That is why the ceiling is reported next to it, and P@k is read as a share of the ceiling. Recall@k carries the main signal; Hits@k is the lenient view.
+
+- [x] **Evaluator** `gold_set_retrieval` (new file `src/cga/pipelines/evaluate/evaluators/gold_set_retrieval.py`; the existing `gold_alignment` and `gold_alignment_prf` stay unchanged so older runs remain comparable):
+  - **Queries:** one per technique that has a test gold pair and appears in every method. Its relevant set is all of that technique's gold CWEs that are in the candidate pool.
+  - **Candidates:** every shared CWE, or the `target_pool` CWEs. There is no sibling filter, because all gold CWEs are relevant together.
+  - **Output:** rows `hits_at_k`, `recall_at_k`, `precision_at_k` and `precision_ceiling_at_k` (`param_name = k`). `n_queries` is the number of techniques.
+  - **Provenance:** query-set sha256, `n_dropped_missing_in_a_method`, and the `|R_t|` distribution (mean, median, max).
+  - Reuse `metrics.top_k_by_similarity`, `hit_at_k` and `recall_at_k`, and add `precision_at_k` to `metrics.py`.
+- [x] **Unit tests:**
+  - A hand-built 3-technique case covering `|R| = 1`, `|R| > k`, and a relevant CWE outside the pool.
+  - Tie-break by id.
+  - Ceiling values.
+  - A random-vector sanity check: mean Recall@k ≈ k / |pool| within tolerance.
+- [x] **Config** `configs/experiments/attack_cwe_ent_set_eval.yaml`:
+  - **Methods:** frozen SecRoBERTa (new store), dual triplet / InfoNCE (`…-s42b`), and `random-rand42/43/44`.
+  - **Evaluations:** `set_full` and `set_pool` (`gold_set_retrieval`, `ks: [1, 5, 10, 15, 20, 50]`).
+  - Keep `gold_full` / `prf_full` from 11.4 as a bridge to earlier numbers.
+- [x] **Run** one `evaluate` per gold source, using the 11.6 ingest runs. Repeat the union run and confirm the metric rows are identical.
+- [x] **Old vs new texts** (same evaluator, frozen SecRoBERTa): score the old store `20261027T010723Z-8bc08adc` against the old ingests and the new store against the new ingests. This isolates the effect of the bug fix.
+- [x] **Tables** per source and view: rows = methods; columns = Hits@k, Recall@k and Precision@k (with ceiling) for k = 5, 10, 15, 20; plus the lift of Recall@10 over random. Extend `scripts/unsup_summary.py` (new row set and column set).
+- [x] **Report, without tuning:**
+  - whether the fix changes frozen SecRoBERTa's Recall@k and the hubness;
+  - whether either dual row beats frozen on Recall@10 / Hits@10 in either view;
+  - which loss is higher.
+  - Limits: single seed; the pool is built from gold; gold is transitive through CAPEC ("exploits", not "equivalent").
+
+## Phase 11.8: Execution log
+
+- [ ] Append 11.6–11.7 to `dev_docs/execution_logs/sprint_11.md`: the fix and its tests, audit numbers, new ingest / embed / training / evaluate run ids, determinism check, old vs new texts, set-based tables, commands, limits.
+- [ ] Mark the 11.6–11.7 checkboxes.
+
 ## Out of scope
 
-- Plots, other metrics or evaluators, fusion rows, and anything that changes how a method is scored.
-- Other text encoders, other `k`, other samplers, GAT, other seeds, hyperparameter changes.
-- Code changes. If a pipeline fails on this dataset, stop and report it rather than patching it in this sprint.
+- Plots, fusion rows, and any change to the existing `gold_alignment` / `gold_alignment_prf` scoring.
+- Other text encoders, other samplers, GAT, other seeds, hyperparameter changes.
+- Phases 11.1–11.5: no code changes. Phase 11.6 changes only the CWE description parser and `gcl_train` seeding; Phase 11.7 adds only the new evaluator, its metric helper and the summary-script tables.

@@ -1,0 +1,27 @@
+# Sprint 11 Phase 11.7 -- set-based gold evaluation (Hits@k / Recall@k / Precision@k per technique) on the corrected CWE texts.
+#   uv run cga run evaluate --dataset attack_cwe_ent --experiment attack_cwe_ent_set_eval #       --set evaluate.inputs.ingest_run=<11.6 ingest run of that source>
+# ent-s-r1-old is the frozen SecRoBERTa store built before the 11.6 parser fix; the 11.6 ingests have the same nodes and
+# gold pairs as the old ones, so scoring it here equals scoring it against the old ingests (checked in the execution log).
+# The dual models resolve to the CPU single-thread runs (LATEST), which reproduce bit-for-bit.
+evaluate:
+  methods:
+    - {method_id: ent-s-r1, label: "SecRoBERTa (frozen)", kind: embedding_store, embedder_id: hf_mean_pool-pt_SecRoBERTa, ref: latest}
+    - {method_id: ent-s-r1-old, label: "SecRoBERTa (frozen, pre-fix texts)", kind: embedding_store, embedder_id: hf_mean_pool-pt_SecRoBERTa, ref: 20261027T010723Z-8bc08adc}
+    - {method_id: ent-d-trip, label: "Dual GCN (triplet)", kind: gcl_run, model_id: ent-dual-gcn-triplet-s42b, ref: latest}
+    - {method_id: ent-d-nce, label: "Dual GCN (InfoNCE)", kind: gcl_run, model_id: ent-dual-gcn-infonce-s42b, ref: latest}
+    - {method_id: ent-rand-s42, label: "Random ranking", kind: embedding_store, embedder_id: random-rand42, ref: latest}
+    - {method_id: ent-rand-s43, label: "Random ranking", kind: embedding_store, embedder_id: random-rand43, ref: latest}
+    - {method_id: ent-rand-s44, label: "Random ranking", kind: embedding_store, embedder_id: random-rand44, ref: latest}
+  evaluations:
+    - evaluation_id: set_full
+      kind: gold_set_retrieval
+      params: {ks: [1, 5, 10, 15, 20, 50], split: test}
+    - evaluation_id: set_pool
+      kind: gold_set_retrieval
+      params: {ks: [1, 5, 10, 15, 20, 50], split: test, target_pool: data/processed/attack_cwe_ent/target_pool_union.json}
+    - evaluation_id: gold_full
+      kind: gold_alignment
+      params: {ks: [1, 5, 10], split: test, modes: [global], sibling_filter_splits: [test]}
+    - evaluation_id: prf_full
+      kind: gold_alignment_prf
+      params: {split: test, assignment: greedy_one_to_one, top_k: 3, threshold: 0.0, biogitom_filters: false}

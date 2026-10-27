@@ -139,6 +139,33 @@ def recall_at_k(learned_ranked_ids: list[str], relevant: set[str], k: int) -> fl
     return len(learned_top_k & relevant) / len(relevant)
 
 
+def precision_at_k(learned_ranked_ids: list[str], relevant: set[str], k: int) -> float:
+    """Plain precision: ``|L_k ∩ R| / k``.
+
+    Unlike :func:`normalized_precision_at_k`, the denominator is always ``k``, so a query with fewer
+    than ``k`` relevant items cannot reach 1.0. The best possible value is
+    :func:`precision_ceiling_at_k`; the ``gold_set_retrieval`` evaluator reports both.
+
+    Args:
+        learned_ranked_ids: Candidate ids ranked by the method, most similar first.
+        relevant: The relevant set for this query.
+        k: Cutoff.
+
+    Returns:
+        0.0 if ``k == 0`` or ``relevant`` is empty.
+    """
+    if k == 0 or not relevant:
+        return 0.0
+    return len(set(top_k(learned_ranked_ids, k)) & relevant) / k
+
+
+def precision_ceiling_at_k(n_relevant: int, k: int) -> float:
+    """Best possible :func:`precision_at_k`: ``min(|R|, k) / k``."""
+    if k == 0 or n_relevant <= 0:
+        return 0.0
+    return min(n_relevant, k) / k
+
+
 def hit_at_k(learned_ranked_ids: list[str], relevant: set[str], k: int) -> float:
     """Whether *any* relevant item lands in the method's top-``k``.
 

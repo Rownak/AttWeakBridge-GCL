@@ -182,3 +182,17 @@ def test_lift_table_divides_by_the_random_mrr_and_selects_the_evaluation():
     assert "0.0800 (2.0x)" in text and "| Random ranking | 0.0400 |" in text
     report = unsup_summary.build_source_report(aggs, ranking_eval="gold_pool", rows=unsup_summary.ATTACK_ENT_POOL_ROWS)
     assert "0.0800" in report and "0.0200" not in report  # the pool view, not the full view
+
+
+def test_set_report_shows_metrics_per_k_the_ceiling_and_recall_lift():
+    rows = []
+    for method, recall in (("ent-d-nce", 0.20), ("ent-rand-s42", 0.05), ("ent-rand-s43", 0.05)):
+        for k in (5, 10):
+            for name, value in (("hits_at_k", 0.3), ("recall_at_k", recall), ("precision_at_k", 0.02), ("precision_ceiling_at_k", 0.4)):
+                rows.append(_row(method, "set_full", "gold_set_retrieval", name, value, k=float(k)))
+    aggs = {"union": unsup_summary.aggregate(pd.DataFrame(rows))}
+    text = unsup_summary.build_set_report(aggs, set_eval="set_full", ks=(5, 10), lift_k=10)
+    assert "Hits@5 | Recall@5 | Precision@5 | Hits@10" in text
+    assert "| Dual GCN, InfoNCE | 0.3000 | 0.2000 | 0.0200 | 0.3000 | 0.2000 | 0.0200 |" in text
+    assert "*precision ceiling*" in text and "0.4000" in text
+    assert "0.2000 (4.0x)" in text and "| Random ranking | 0.0500 |" in text

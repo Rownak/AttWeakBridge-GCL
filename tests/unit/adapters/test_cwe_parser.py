@@ -56,3 +56,58 @@ def test_iter_texts_assembles_variants_and_skips_placeholder():
     texts = {t.node_id: t for t in iter_cwe_texts(result, graph_key="cwe", text_variants=text_variants)}
     assert texts["cwe:79"].text == "Improper Neutralization Weakness 79 description. Weakness 79 extended description."
     assert texts["cwe:80"].text == "No Description Weakness"
+
+
+_NESTED_XML = """<?xml version="1.0" encoding="UTF-8"?>
+<Weakness_Catalog xmlns="http://cwe.mitre.org/cwe-7" xmlns:xhtml="http://www.w3.org/1999/xhtml" Version="4.20">
+  <Weaknesses>
+    <Weakness ID="284" Name="Plain Description" Abstraction="Pillar">
+      <Description>The product does not restrict access.</Description>
+      <Detection_Methods>
+        <Detection_Method>
+          <Method>Automated Static Analysis</Method>
+          <Description><xhtml:p>Detected by static analysis tools.</xhtml:p></Description>
+        </Detection_Method>
+      </Detection_Methods>
+      <Potential_Mitigations>
+        <Mitigation>
+          <Phase>Architecture and Design</Phase>
+          <Description><xhtml:p>Compartmentalize the system.</xhtml:p></Description>
+        </Mitigation>
+      </Potential_Mitigations>
+    </Weakness>
+    <Weakness ID="120" Name="Paragraph Description">
+      <Description><xhtml:p>First.</xhtml:p><xhtml:p>Second.</xhtml:p></Description>
+    </Weakness>
+    <Weakness ID="999" Name="No Description">
+      <Potential_Mitigations>
+        <Mitigation><Description><xhtml:p>Mitigation only.</xhtml:p></Description></Mitigation>
+      </Potential_Mitigations>
+    </Weakness>
+  </Weaknesses>
+</Weakness_Catalog>
+"""
+
+
+def test_description_ignores_nested_mitigation_and_detection_descriptions(tmp_path):
+    path = tmp_path / "nested.xml"
+    path.write_text(_NESTED_XML, encoding="utf-8")
+    weaknesses = parse_cwe_catalog(path).weaknesses
+    assert weaknesses["284"].description == "The product does not restrict access."
+    # The nested fields still come from their own parsers.
+    assert "Compartmentalize the system." in weaknesses["284"].potential_mitigations
+    assert "Detected by static analysis tools." in weaknesses["284"].detection_methods
+
+
+def test_description_with_xhtml_paragraphs_is_still_joined(tmp_path):
+    path = tmp_path / "nested.xml"
+    path.write_text(_NESTED_XML, encoding="utf-8")
+    assert parse_cwe_catalog(path).weaknesses["120"].description == "First.Second."
+
+
+def test_missing_description_is_na_not_nested_text(tmp_path):
+    path = tmp_path / "nested.xml"
+    path.write_text(_NESTED_XML, encoding="utf-8")
+    weakness = parse_cwe_catalog(path).weaknesses["999"]
+    assert weakness.description == "N/A"
+    assert weakness.extended_description == "N/A"

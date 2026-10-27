@@ -32,6 +32,7 @@ from cga.core.pipeline import Pipeline, Step
 from cga.core.protocol import get_protocol, is_unsupervised, refuse
 from cga.core.registry import pipelines
 from cga.core.run import RunContext
+from cga.core.seeds import seed_everything
 from cga.data.aligned import AlignedMatrix, NodeUniverse
 from cga.data.example_store import read_examples
 from cga.data.graph_store import read_alignments, read_edges
@@ -304,6 +305,10 @@ class TrainStep:
                 "No train-split examples found in the training_data run's examples.parquet; "
                 "cannot train with zero anchor/positive/negative triples"
             )
+
+        # Seed here, before the model is built: RunContext only records the seed, and the weight
+        # initialisation and example shuffling would otherwise differ between runs (Sprint 11.2).
+        seed_everything(ctx.seed)
 
         cfg = ctx.config["gcl_train"]
         model_cfg = cfg["model"]

@@ -90,6 +90,14 @@ ATTACK_ENT_DUAL_ROWS = [
     ("ent-s-r2", "GCN(SecRoBERTa) residual (10.5)", "SecRoBERTa top-k", "InfoNCE"),
     ("ent-rand", "Random ranking", "–", "–"),
 ]
+# Sprint 11.7: set-based evaluation (gold_set_retrieval) of the corrected texts, with the pre-fix SecRoBERTa store as a reference.
+ATTACK_ENT_SET_ROWS = [
+    ("ent-d-trip", "Dual GCN, triplet", "SecRoBERTa top-k", "Triplet"),
+    ("ent-d-nce", "Dual GCN, InfoNCE", "SecRoBERTa top-k", "InfoNCE"),
+    ("ent-s-r1", "SecRoBERTa (frozen)", "–", "–"),
+    ("ent-s-r1-old", "SecRoBERTa (frozen, pre-fix texts)", "–", "–"),
+    ("ent-rand", "Random ranking", "–", "–"),
+]
 ROW_SETS = {
     "matrix": PAPER_ROWS,
     "deepwalk": DEEPWALK_ROWS,
@@ -98,6 +106,7 @@ ROW_SETS = {
     "attack_ent_srb": ATTACK_ENT_SRB_ROWS,
     "attack_ent_pool": ATTACK_ENT_POOL_ROWS,
     "attack_ent_dual": ATTACK_ENT_DUAL_ROWS,
+    "attack_ent_set": ATTACK_ENT_SET_ROWS,
 }
 _COUNT_METRICS = {"n_predicted", "n_correct", "n_gold", "n_unique_sources", "n_unique_targets"}
 
@@ -372,6 +381,73 @@ def build_source_report(
     return "\n".join(parts)
 
 
+def build_set_report(
+    aggs: dict[str, pd.DataFrame],
+    *,
+    set_eval: str,
+    ks: tuple[int, ...] = (5, 10, 15, 20),
+    lift_k: int = 10,
+    rows: list[tuple[str, str, str, str]] | None = None,
+    random_group: str = "ent-rand",
+) -> str:
+    """Render the Sprint 11.7 report of one ``gold_set_retrieval`` evaluation.
+
+    One table per gold source (rows = methods; Hits / Recall / Precision at each ``k``, plus a row with
+    the precision ceiling ``min(|R|, k) / k``), then a table of Recall@``lift_k`` and its ratio to the random baseline.
+
+    Args:
+        aggs: ``{source name: aggregate() output of that source's evaluate run}``.
+        set_eval: ``gold_set_retrieval`` evaluation id (``set_full`` or ``set_pool``).
+        ks: Cutoffs shown in the per-source tables.
+        lift_k: Cutoff of the Recall lift table.
+        rows: Row set (default :data:`ATTACK_ENT_SET_ROWS`).
+        random_group: Method group of the random baseline.
+
+    Returns:
+        The Markdown text.
+    """
+    rows = rows or ATTACK_ENT_SET_ROWS
+    header = ["Variant"] + [f"{m}@{k}" for k in ks for m in ("Hits", "Recall", "Precision")]
+    parts: list[str] = []
+    for source, agg in aggs.items():
+        present = set(agg.method_group)
+        body = []
+        for key, variant, _, _ in rows:
+            if key not in present:
+                continue
+            cells = [
+                _cell(agg, key, set_eval, "global", name, k)
+                for k in ks
+                for name in ("hits_at_k", "recall_at_k", "precision_at_k")
+            ]
+            body.append([variant] + cells)
+        first = next(r[0] for r in rows if r[0] in present)
+        ceiling = [
+            MISSING if name != "precision_at_k" else _cell(agg, first, set_eval, "global", "precision_ceiling_at_k", k)
+            for k in ks
+            for name in ("hits_at_k", "recall_at_k", "precision_at_k")
+        ]
+        body.append(["*precision ceiling*"] + ceiling)
+        parts += [f"## Gold source `{source}` (`{set_eval}`)", "", _markdown_table(header, body), ""]
+    sources = list(aggs)
+    lift_header = ["Row"] + [f"{s} R@{lift_k} (x random)" for s in sources]
+    lift_body = []
+    for key, variant, _, _ in rows:
+        cells = [variant]
+        for source in sources:
+            value = _mean(aggs[source], key, set_eval, "global", "recall_at_k", lift_k)
+            base = _mean(aggs[source], random_group, set_eval, "global", "recall_at_k", lift_k)
+            if value is None or base is None or base == 0:
+                cells.append(MISSING)
+            elif key == random_group:
+                cells.append(f"{value:.4f}")
+            else:
+                cells.append(f"{value:.4f} ({value / base:.1f}x)")
+        lift_body.append(cells)
+    parts += [f"## Recall@{lift_k} and lift over the random baseline (`{set_eval}`)", "", _markdown_table(lift_header, lift_body), ""]
+    return "\n".join(parts)
+
+
 def build_lift_table(
     aggs: dict[str, pd.DataFrame],
     *,
@@ -464,6 +540,7 @@ def main() -> None:
     ap.add_argument("--text-label", default="BERT", help="encoder name in the paper-table row labels")
     ap.add_argument("--source-run", action="append", default=[], metavar="NAME=RUN",
                     help="Sprint 10: gold source name and its evaluate run; repeat once per source (writes sources_summary.md)")
+    ap.add_argument("--set-eval", help="Sprint 11.7: gold_set_retrieval evaluation id; with --source-run writes build_set_report")
     ap.add_argument("--lift", action="store_true", help="Sprint 10.6: add the MRR / random-MRR table (needs --ranking-eval)")
     ap.add_argument("--out-name", default="sources_summary.md", help="file name written with --source-run")
     ap.add_argument("--compare-source-run", action="append", default=[], metavar="NAME=RUN",
@@ -478,6 +555,10 @@ def main() -> None:
         pairs = [a.split("=", 1) for a in args.source_run]
         aggs = {n: aggregate(pd.read_parquet(Path(args.root) / args.dataset / r / "metrics.parquet")) for n, r in pairs}
         out = Path(args.root) / args.dataset / args.run / args.out_name
+        if args.set_eval:
+            out.write_text(build_set_report(aggs, set_eval=args.set_eval, rows=ROW_SETS[args.rows]), encoding="utf-8")
+            print(f"wrote {out}")
+            return
         text = build_source_report(
             aggs, view=args.view, rows=ROW_SETS[args.rows], ranking_eval=args.ranking_eval, prf_eval=args.prf_eval
         )
