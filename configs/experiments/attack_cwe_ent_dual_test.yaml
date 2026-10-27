@@ -1,0 +1,27 @@
+# Sprint 11 Phase 11.4 -- dual-encoder GCN (triplet / InfoNCE, Phase 11.2) against frozen SecRoBERTa, the Sprint 10.5 residual
+# adapter and the random baseline; same four evaluations as attack_cwe_ent_pool_test (full-CWE and 151-CWE pool views).
+#   uv run cga run evaluate --dataset attack_cwe_ent --experiment attack_cwe_ent_dual_test #       --set evaluate.inputs.ingest_run=<ingest run of that source>
+# The triplet model is pinned to its first run: a rerun (…025903Z) exists under the same model id and gcl_train is not yet
+# deterministic (see dev_docs/execution_logs/sprint_11.md section 4), so `latest` would score a different draw.
+evaluate:
+  methods:
+    - {method_id: ent-d-trip, label: "Dual GCN (triplet)", kind: gcl_run, model_id: ent-dual-gcn-triplet-s42, ref: 20261027T025828Z-18d30b07}
+    - {method_id: ent-d-nce, label: "Dual GCN (InfoNCE)", kind: gcl_run, model_id: ent-dual-gcn-infonce-s42, ref: latest}
+    - {method_id: ent-s-r1, label: "SecRoBERTa (frozen)", kind: embedding_store, embedder_id: hf_mean_pool-pt_SecRoBERTa, ref: latest}
+    - {method_id: ent-s-r2-s42, label: "GCN(SecRoBERTa) residual", kind: gcl_run, model_id: ent-g-srb-s42, ref: latest}
+    - {method_id: ent-rand-s42, label: "Random ranking", kind: embedding_store, embedder_id: random-rand42, ref: latest}
+    - {method_id: ent-rand-s43, label: "Random ranking", kind: embedding_store, embedder_id: random-rand43, ref: latest}
+    - {method_id: ent-rand-s44, label: "Random ranking", kind: embedding_store, embedder_id: random-rand44, ref: latest}
+  evaluations:
+    - evaluation_id: gold_full
+      kind: gold_alignment
+      params: {ks: [1, 5, 10], split: test, modes: [global], sibling_filter_splits: [test]}
+    - evaluation_id: prf_full
+      kind: gold_alignment_prf
+      params: {split: test, assignment: greedy_one_to_one, top_k: 3, threshold: 0.0, biogitom_filters: false}
+    - evaluation_id: gold_pool
+      kind: gold_alignment
+      params: {ks: [1, 5, 10], split: test, modes: [global], sibling_filter_splits: [test], target_pool: data/processed/attack_cwe_ent/target_pool_union.json}
+    - evaluation_id: prf_pool
+      kind: gold_alignment_prf
+      params: {split: test, assignment: greedy_one_to_one, top_k: 3, threshold: 0.0, biogitom_filters: false, target_pool: data/processed/attack_cwe_ent/target_pool_union.json}

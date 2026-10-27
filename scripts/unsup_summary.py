@@ -82,6 +82,14 @@ ATTACK_ENT_SRB_ROWS = [
 ]
 # Sprint 10.6: both encoders and the random baseline, in one evaluate run with a full-CWE view and a shared-pool view.
 ATTACK_ENT_POOL_ROWS = ATTACK_ENT_ROWS + ATTACK_ENT_SRB_ROWS + [("ent-rand", "Random ranking", "–", "–")]
+# Sprint 11.4: the dual-encoder GCN (triplet / InfoNCE, SecRoBERTa + DeepWalk) against frozen SecRoBERTa, the residual adapter and random.
+ATTACK_ENT_DUAL_ROWS = [
+    ("ent-d-trip", "Dual GCN, triplet", "SecRoBERTa top-k", "Triplet"),
+    ("ent-d-nce", "Dual GCN, InfoNCE", "SecRoBERTa top-k", "InfoNCE"),
+    ("ent-s-r1", "SecRoBERTa (frozen)", "–", "–"),
+    ("ent-s-r2", "GCN(SecRoBERTa) residual (10.5)", "SecRoBERTa top-k", "InfoNCE"),
+    ("ent-rand", "Random ranking", "–", "–"),
+]
 ROW_SETS = {
     "matrix": PAPER_ROWS,
     "deepwalk": DEEPWALK_ROWS,
@@ -89,6 +97,7 @@ ROW_SETS = {
     "attack_ent": ATTACK_ENT_ROWS,
     "attack_ent_srb": ATTACK_ENT_SRB_ROWS,
     "attack_ent_pool": ATTACK_ENT_POOL_ROWS,
+    "attack_ent_dual": ATTACK_ENT_DUAL_ROWS,
 }
 _COUNT_METRICS = {"n_predicted", "n_correct", "n_gold", "n_unique_sources", "n_unique_targets"}
 
@@ -476,7 +485,7 @@ def main() -> None:
             lift_eval = args.ranking_eval or _first_evaluation(next(iter(aggs.values())), "gold_alignment", None)
             text += (
                 f"\n## MRR and lift over the random baseline (`{lift_eval}`)\n\n"
-                + build_lift_table(aggs, ranking_eval=lift_eval, view=args.view)
+                + build_lift_table(aggs, ranking_eval=lift_eval, view=args.view, rows=ROW_SETS[args.rows])
                 + "\n"
             )
         if args.compare_source_run:
