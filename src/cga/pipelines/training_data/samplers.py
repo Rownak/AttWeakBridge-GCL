@@ -26,7 +26,7 @@ from cga.pipelines.training_data.similarity import SimilarityMatrix
 
 ExampleTuple = tuple[str, str, str, str, str]
 
-_NEGATIVES = ("bottomk", "random", "hard")
+_NEGATIVES = ("bottomk", "random", "hard", "cross_modal_hard")
 _POSITIVES = ("topk", "mutual")
 
 
@@ -119,6 +119,39 @@ def _topk_membership(values: np.ndarray, k: int, *, exclude_diagonal: bool):
     return in_topk
 
 
+def _lowest_similarity_negatives(positives: list[str], pool: list[str], sim: SimilarityMatrix) -> list[str]:
+    """Pick one pool node per positive: the one least similar to that positive under ``sim``.
+
+    Positives are handled in the given (rank) order and every pool node is used at most once, so the
+    negatives of one anchor are distinct. Ties go to the earlier pool node, which makes the choice
+    deterministic. Positives or pool nodes that ``sim`` does not cover are skipped; the result stops at
+    the first positive that has no negative left, like the zip of the other options.
+
+    Args:
+        positives: Positive node ids in rank order (rows of ``sim``).
+        pool: Candidate negative node ids in rank order (columns of ``sim``).
+        sim: Similarity between the positives' graph (rows) and the pool's graph (columns).
+
+    Returns:
+        Negative node ids aligned with the leading positives.
+    """
+    row_of = {nid: i for i, nid in enumerate(sim.row_ids)}
+    col_of = {nid: i for i, nid in enumerate(sim.col_ids)}
+    pool_ids = [nid for nid in pool if nid in col_of]
+    pool_cols = np.array([col_of[nid] for nid in pool_ids], dtype=np.int64)
+    available = np.ones(len(pool_ids), dtype=bool)
+    chosen: list[str] = []
+    for positive in positives:
+        row = row_of.get(positive)
+        if row is None or not available.any():
+            break
+        values = np.where(available, sim.values[row, pool_cols], np.inf)
+        best = int(np.argmin(values))
+        available[best] = False
+        chosen.append(pool_ids[best])
+    return chosen
+
+
 def _rank_topk_one_direction(
     text_sim: SimilarityMatrix,
     graph_sim: SimilarityMatrix,
@@ -127,7 +160,10 @@ def _rank_topk_one_direction(
     negatives: str = "bottomk",
     positives: str = "topk",
     hard_offset: int = 10,
+    hard_pool: int = 50,
     rng: random.Random | None = None,
+    other_graph_sim: SimilarityMatrix | None = None,
+    own_text_sim: SimilarityMatrix | None = None,
 ) -> list[ExampleTuple]:
     """Emit rank-zipped (anchor, text_pos, text_neg, graph_pos, graph_neg) tuples for one anchor set.
 
@@ -148,6 +184,13 @@ def _rank_topk_one_direction(
     shortest list. ``negatives`` changes the **text** negatives only (graph negatives stay
     bottom-k): ``random`` draws up to k columns outside the positives with ``rng``, ``hard`` takes
     ranks ``hard_offset+1 … hard_offset+k``.
+
+    ``negatives="cross_modal_hard"`` (Sprint 11.14) changes **both** negatives. The text negative of a
+    text positive ``p`` is, among the anchor's text ranks ``k+1 … k+hard_pool`` (plausible by text, not
+    positives), the node with the lowest structural similarity to ``p`` (``other_graph_sim``, the graph
+    embedding similarity of the positives' graph). The graph negative of a graph positive ``q`` is,
+    among the anchor's structural ranks ``k+1 … k+hard_pool``, the node with the lowest text similarity
+    to ``q`` (``own_text_sim``, text similarity within the anchor's graph). Gold pairs are never read.
     """
     text_row_of = {nid: i for i, nid in enumerate(text_sim.row_ids)}
     graph_row_of = {nid: i for i, nid in enumerate(graph_sim.row_ids)}
@@ -175,7 +218,26 @@ def _rank_topk_one_direction(
             text_top = np.array([j for j in text_top if text_mutual(int(j), anchor_text_row)], dtype=np.int64)
             graph_top = np.array([j for j in graph_top if graph_mutual(int(j), anchor_graph_row)], dtype=np.int64)
 
-        if negatives == "random":
+        graph_neg_override = None
+        if negatives == "cross_modal_hard":
+            assert other_graph_sim is not None and own_text_sim is not None
+            text_pool = _descending_ranks(text_row)[k : k + hard_pool]
+            graph_pool = _descending_ranks(
+                graph_sim.values[anchor_graph_row], exclude_index=graph_col_of.get(anchor_id)
+            )[k : k + hard_pool]
+            text_neg_ids = _lowest_similarity_negatives(
+                [text_sim.col_ids[j] for j in text_top],
+                [text_sim.col_ids[j] for j in text_pool],
+                other_graph_sim,
+            )
+            graph_neg_override = _lowest_similarity_negatives(
+                [graph_sim.col_ids[j] for j in graph_top],
+                [graph_sim.col_ids[j] for j in graph_pool],
+                own_text_sim,
+            )
+            text_col_index = {nid: i for i, nid in enumerate(text_sim.col_ids)}
+            text_neg = [text_col_index[nid] for nid in text_neg_ids]
+        elif negatives == "random":
             assert rng is not None
             drawn = rng.sample(range(n_text_cols), min(n_text_cols, k + len(text_top)))
             positive_set = set(text_top.tolist())
@@ -185,7 +247,10 @@ def _rank_topk_one_direction(
         else:
             text_neg = text_bottom.tolist()
 
-        n = min(len(text_top), len(graph_top), len(text_neg), len(graph_bottom))
+        graph_negative_ids = (
+            graph_neg_override if graph_neg_override is not None else [graph_sim.col_ids[j] for j in graph_bottom]
+        )
+        n = min(len(text_top), len(graph_top), len(text_neg), len(graph_negative_ids))
         for j in range(n):
             examples.append(
                 (
@@ -193,7 +258,7 @@ def _rank_topk_one_direction(
                     text_sim.col_ids[text_top[j]],
                     text_sim.col_ids[text_neg[j]],
                     graph_sim.col_ids[graph_top[j]],
-                    graph_sim.col_ids[graph_bottom[j]],
+                    graph_negative_ids[j],
                 )
             )
     return examples
@@ -208,6 +273,8 @@ def rank_topk_sampler(
     config: dict,
     seed: int,
     alignments: list[dict] | None = None,
+    text_g1_g1: SimilarityMatrix | None = None,
+    text_g2_g2: SimilarityMatrix | None = None,
 ) -> list[ExampleTuple]:
     """Top-k/bottom-k by argsort, pairs zipped by rank (legacy ``sample_10``).
 
@@ -224,7 +291,8 @@ def rank_topk_sampler(
 
     - ``negatives``: ``bottomk`` | ``random`` | ``hard`` (text negatives; ``hard`` uses
       ``hard_offset``, default 10, and needs ``hard_offset >= k`` so top pseudo-positives are
-      not reused as negatives).
+      not reused as negatives) | ``cross_modal_hard`` (text and graph negatives; uses
+      ``hard_pool``, default 50, and needs ``text_g1_g1`` / ``text_g2_g2``).
     - ``positives``: ``topk`` | ``mutual`` (keep a top-k positive only if the anchor is also in
       the positive's top-k).
 
@@ -241,17 +309,35 @@ def rank_topk_sampler(
         raise ConfigError(f"Unknown rank_topk positives '{positives}'; expected one of {list(_POSITIVES)}")
     if negatives == "hard" and hard_offset < k:
         raise ConfigError(f"rank_topk hard_offset ({hard_offset}) must be >= k ({k})")
+    hard_pool = config.get("hard_pool", 50)
+    if negatives == "cross_modal_hard":
+        if hard_pool < 1:
+            raise ConfigError(f"rank_topk hard_pool ({hard_pool}) must be >= 1")
+        if text_g1_g1 is None or text_g2_g2 is None:
+            raise ConfigError("rank_topk negatives 'cross_modal_hard' needs the within-graph text similarities")
 
     # One RNG for random negatives and the final shuffle; the default path never draws before the shuffle.
     rng = random.Random(seed)
-    options = {"negatives": negatives, "positives": positives, "hard_offset": hard_offset, "rng": rng}
-    g1_examples = _rank_topk_one_direction(text_g1_g2, graph_g1, k, **options)
+    options = {
+        "negatives": negatives,
+        "positives": positives,
+        "hard_offset": hard_offset,
+        "hard_pool": hard_pool,
+        "rng": rng,
+    }
+    # The text negative is chosen by the structural similarity of the *other* graph (where the positives
+    # live) and the graph negative by the text similarity of the anchor's own graph.
+    g1_examples = _rank_topk_one_direction(
+        text_g1_g2, graph_g1, k, other_graph_sim=graph_g2, own_text_sim=text_g1_g1, **options
+    )
 
     # graph_2 direction: text view is transposed (graph_2 anchors -> graph_1 columns).
     text_g2_g1 = SimilarityMatrix(
         row_ids=text_g1_g2.col_ids, col_ids=text_g1_g2.row_ids, values=text_g1_g2.values.T
     )
-    g2_examples = _rank_topk_one_direction(text_g2_g1, graph_g2, k, **options)
+    g2_examples = _rank_topk_one_direction(
+        text_g2_g1, graph_g2, k, other_graph_sim=graph_g1, own_text_sim=text_g2_g2, **options
+    )
 
     examples = g1_examples + g2_examples
     rng.shuffle(examples)

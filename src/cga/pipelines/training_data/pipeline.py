@@ -49,6 +49,7 @@ from cga.pipelines.training_data.similarity import (
     SimilarityMatrix,
     compute_graph_similarity,
     compute_text_similarity,
+    compute_text_within_similarity,
 )
 
 _HELD_OUT_POLICIES = ("legacy", "none")
@@ -143,6 +144,8 @@ class _TrainingDataState:
         self.text_g1_g2: SimilarityMatrix | None = None
         self.graph_g1: SimilarityMatrix | None = None
         self.graph_g2: SimilarityMatrix | None = None
+        self.text_g1_g1: SimilarityMatrix | None = None  # only for the cross_modal_hard negatives
+        self.text_g2_g2: SimilarityMatrix | None = None
         self.sampled_examples: list[ExampleTuple] = []
         self.sampler_name: str = ""
         self.sampler_stats: dict[str, int] = {}
@@ -273,6 +276,21 @@ class SimilarityStep:
         state.graph_g2 = compute_graph_similarity(
             state.graph_matrix, role="graph_2", graph_role_by_node=graph_role_by_node, held_out_by_node=held_out_by_node
         )
+        # Same-graph text similarity is only needed by the ``cross_modal_hard`` negatives; skip the two
+        # extra square matrices otherwise so existing runs do the same work as before.
+        if ctx.config["training_data"]["sampler"].get("negatives") == "cross_modal_hard":
+            state.text_g1_g1 = compute_text_within_similarity(
+                state.text_matrix,
+                role="graph_1",
+                graph_role_by_node=graph_role_by_node,
+                held_out_by_node=held_out_by_node,
+            )
+            state.text_g2_g2 = compute_text_within_similarity(
+                state.text_matrix,
+                role="graph_2",
+                graph_role_by_node=graph_role_by_node,
+                held_out_by_node=held_out_by_node,
+            )
         ctx.logger.info(
             "similarity: text %dx%d, graph_1 %dx%d, graph_2 %dx%d",
             len(state.text_g1_g2.row_ids),
@@ -330,6 +348,9 @@ class SampleStep:
                 "n_gold_train_pairs_skipped": n_skipped,
             }
 
+        extra = {}
+        if state.text_g1_g1 is not None:
+            extra = {"text_g1_g1": state.text_g1_g1, "text_g2_g2": state.text_g2_g2}
         examples = sampler_fn(
             text_g1_g2=state.text_g1_g2,
             graph_g1=state.graph_g1,
@@ -337,6 +358,7 @@ class SampleStep:
             config=cfg,
             seed=ctx.seed,
             alignments=alignments,
+            **extra,
         )
         state.sampled_examples = examples
         ctx.logger.info("sample: %s produced %d examples", sampler_name, len(examples))

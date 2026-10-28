@@ -407,3 +407,132 @@ def test_rank_topk_unknown_options_are_rejected():
         _g1_examples({"k": 2, "negatives": "nearest"})
     with pytest.raises(ConfigError, match="positives"):
         _g1_examples({"k": 2, "positives": "all"})
+
+
+# ---- cross_modal_hard negatives (Sprint 11.14) -------------------------------------------------
+
+
+def _random_views(seed: int = 0, n1: int = 7, n2: int = 9):
+    """Random but fixed views for both graphs, with symmetric unit-diagonal within-graph matrices."""
+    rng = np.random.default_rng(seed)
+    g1 = [f"a:{i}" for i in range(n1)]
+    g2 = [f"b:{i}" for i in range(n2)]
+
+    def square(ids):
+        m = rng.random((len(ids), len(ids)))
+        m = (m + m.T) / 2
+        np.fill_diagonal(m, 1.0)
+        return SimilarityMatrix(row_ids=ids, col_ids=ids, values=m)
+
+    text_g1_g2 = SimilarityMatrix(row_ids=g1, col_ids=g2, values=rng.random((n1, n2)))
+    return {
+        "text_g1_g2": text_g1_g2,
+        "graph_g1": square(g1),
+        "graph_g2": square(g2),
+        "text_g1_g1": square(g1),
+        "text_g2_g2": square(g2),
+    }
+
+
+def _hard(views, k=2, pool=4, seed=0):
+    return rank_topk_sampler(
+        **views, config={"k": k, "negatives": "cross_modal_hard", "hard_pool": pool}, seed=seed
+    )
+
+
+def test_cross_modal_hard_negatives_are_the_brute_force_lowest_other_modality_pool_nodes():
+    views = _random_views()
+    k, pool = 2, 4
+    by_anchor = {}
+    for tup in _hard(views, k, pool):
+        by_anchor.setdefault(tup[0], []).append(tup)
+
+    g1_ids, g2_ids = views["text_g1_g2"].row_ids, views["text_g1_g2"].col_ids
+    for anchor, rows in by_anchor.items():
+        if anchor in g1_ids:
+            text = views["text_g1_g2"].values[g1_ids.index(anchor)]
+            text_cols, other_graph, own_ids = g2_ids, views["graph_g2"], g1_ids
+            graph = views["graph_g1"]
+            own_text = views["text_g1_g1"]
+        else:
+            text = views["text_g1_g2"].values[:, g2_ids.index(anchor)]
+            text_cols, other_graph, own_ids = g1_ids, views["graph_g1"], g2_ids
+            graph = views["graph_g2"]
+            own_text = views["text_g2_g2"]
+        text_order = list(np.argsort(-text, kind="stable"))
+        positives = [text_cols[j] for j in text_order[:k]]
+        text_pool = [text_cols[j] for j in text_order[k : k + pool]]
+        graph_row = graph.values[own_ids.index(anchor)].copy()
+        graph_row[own_ids.index(anchor)] = -np.inf
+        graph_order = list(np.argsort(-graph_row, kind="stable"))
+        graph_positives = [own_ids[j] for j in graph_order[:k]]
+        graph_pool = [own_ids[j] for j in graph_order[k : k + pool]]
+
+        def expected(pos_list, pool_list, sim):
+            left, chosen = list(pool_list), []
+            for p in pos_list:
+                row = sim.row_ids.index(p)
+                best = min(left, key=lambda c: (sim.values[row, sim.col_ids.index(c)], left.index(c)))
+                left.remove(best)
+                chosen.append(best)
+            return chosen
+
+        rows_by_pos = {r[1]: r for r in rows}
+        assert [r[1] for r in sorted(rows, key=lambda r: positives.index(r[1]))] == positives
+        for p, neg in zip(positives, expected(positives, text_pool, other_graph)):
+            assert rows_by_pos[p][2] == neg
+        rows_by_gpos = {r[3]: r for r in rows}
+        for q, neg in zip(graph_positives, expected(graph_positives, graph_pool, own_text)):
+            assert rows_by_gpos[q][4] == neg
+
+
+def test_cross_modal_hard_negatives_are_valid_distinct_and_never_positives_or_self():
+    views = _random_views(seed=3)
+    k = 2
+    by_anchor = {}
+    for tup in _hard(views, k, 4):
+        by_anchor.setdefault(tup[0], []).append(tup)
+    assert len(by_anchor) == 16
+    for anchor, rows in by_anchor.items():
+        text_pos, text_neg = {r[1] for r in rows}, [r[2] for r in rows]
+        graph_pos, graph_neg = {r[3] for r in rows}, [r[4] for r in rows]
+        same_graph = anchor[0]
+        assert len(set(text_neg)) == len(text_neg) and len(set(graph_neg)) == len(graph_neg)
+        assert not (set(text_neg) & text_pos) and not (set(graph_neg) & graph_pos)
+        assert anchor not in graph_pos and anchor not in graph_neg
+        assert all(n[0] != same_graph for n in text_neg)  # text negatives are in the other graph
+        assert all(n[0] == same_graph for n in graph_neg)  # graph negatives are in the anchor's graph
+
+
+def test_cross_modal_hard_is_reproducible_and_keeps_the_positives_of_bottomk():
+    views = _random_views(seed=5)
+    first, second = _hard(views, 2, 4, seed=7), _hard(views, 2, 4, seed=7)
+    assert first == second
+    bottomk = rank_topk_sampler(
+        **{k: v for k, v in views.items() if k in ("text_g1_g2", "graph_g1", "graph_g2")},
+        config={"k": 2},
+        seed=7,
+    )
+    assert [(t[0], t[1], t[3]) for t in first] == [(t[0], t[1], t[3]) for t in bottomk]
+    assert [t[2] for t in first] != [t[2] for t in bottomk]
+
+
+def test_cross_modal_hard_uses_only_ids_of_the_given_matrices():
+    views = _random_views(seed=2)
+    allowed = set(views["text_g1_g2"].row_ids) | set(views["text_g1_g2"].col_ids)
+    assert {nid for tup in _hard(views) for nid in tup} <= allowed
+
+
+def test_cross_modal_hard_pool_shorter_than_k_caps_rows_and_requires_its_inputs():
+    views = _random_views(seed=1)
+    assert len(_hard(views, k=2, pool=1)) < len(_hard(views, k=2, pool=4))
+    with pytest.raises(ConfigError, match="hard_pool"):
+        _hard(views, pool=0)
+    with pytest.raises(ConfigError, match="within-graph text"):
+        rank_topk_sampler(
+            text_g1_g2=views["text_g1_g2"],
+            graph_g1=views["graph_g1"],
+            graph_g2=views["graph_g2"],
+            config={"k": 2, "negatives": "cross_modal_hard"},
+            seed=0,
+        )

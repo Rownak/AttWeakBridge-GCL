@@ -1,4 +1,4 @@
-"""Registered contrastive losses: ``triplet``, ``infonce`` and ``infonce_full`` (target_architecture.md §5.4, §7.8).
+"""Registered contrastive losses: ``triplet``, ``infonce``, ``infonce_inbatch`` and ``infonce_full`` (target_architecture.md §5.4, §7.8).
 
 Both operate on the final fused node embeddings (not raw input features), take
 one row per ``(anchor, positive, negative)`` index into those embeddings, and
@@ -129,6 +129,98 @@ def infonce_loss(
             temperature,
             use_reentrant=False,
         )
+    return total / n
+
+
+def _inbatch_rows(
+    anchor_n: torch.Tensor,
+    positive_n: torch.Tensor,
+    candidate_n: torch.Tensor,
+    log_counts: torch.Tensor,
+    valid: torch.Tensor,
+    temperature: float,
+) -> torch.Tensor:
+    """Sum of the positive-only InfoNCE cross-entropy over the given anchor rows.
+
+    ``valid[i, c]`` says candidate ``c`` may serve as a negative of row ``i``; invalid candidates get
+    ``-inf`` so they drop out of the denominator.
+    """
+    positive_logit = torch.sum(anchor_n * positive_n, dim=1, keepdim=True) / temperature
+    candidate_logits = (anchor_n @ candidate_n.t()) / temperature + log_counts
+    candidate_logits = candidate_logits.masked_fill(~valid, float("-inf"))
+    logits = torch.cat([positive_logit, candidate_logits], dim=1)
+    labels = torch.zeros(logits.size(0), dtype=torch.long, device=anchor_n.device)
+    return F.cross_entropy(logits, labels, reduction="sum")
+
+
+@losses.register("infonce_inbatch")
+def infonce_inbatch_loss(
+    embeddings: torch.Tensor,
+    anchor: torch.Tensor,
+    positive: torch.Tensor,
+    roles: torch.Tensor,
+    *,
+    temperature: float = 0.1,
+    chunk_rows: int = _INFONCE_CHUNK_ROWS,
+) -> torch.Tensor:
+    """Positive-only InfoNCE: no explicitly sampled negatives, in-batch negatives only (Sprint 11.14).
+
+    Row ``i`` scores its own positive against every other row's positive, taken from the same batch.
+    A candidate is a negative of row ``i`` only if it has the same graph role as the row's positive
+    (so a cross-graph row is contrasted with nodes of the target graph) and it is not a positive of
+    the same anchor: the row's own positive and the anchor's other pseudo-positives are masked out of
+    the denominator. Candidates that occur in several rows are counted once per occurrence, as in the
+    plain in-batch formulation and in :func:`infonce_loss`. The negative columns of ``examples.parquet``
+    are never read. Rows are processed in chunks under activation checkpointing for memory, as in
+    :func:`infonce_loss`.
+
+    Args:
+        embeddings: ``(n_universe, d)`` fused node embeddings.
+        anchor: ``(n_rows,)`` anchor row indices into ``embeddings``.
+        positive: ``(n_rows,)`` positive row indices (one view: text or graph).
+        roles: ``(n_universe,)`` integer graph role per universe row.
+        temperature: Softmax temperature.
+        chunk_rows: Rows per checkpointed chunk.
+
+    Returns:
+        The mean loss over rows.
+    """
+    embeddings_n = F.normalize(embeddings, p=2, dim=1)
+    n = anchor.size(0)
+    candidates, positive_slot, counts = torch.unique(positive, return_inverse=True, return_counts=True)
+    anchors_unique, anchor_slot = torch.unique(anchor, return_inverse=True)
+    # is_positive_of[a, c]: candidate c is a pseudo-positive of anchor a (in any row of that anchor).
+    is_positive_of = torch.zeros(
+        (anchors_unique.size(0), candidates.size(0)), dtype=torch.bool, device=embeddings.device
+    )
+    is_positive_of[anchor_slot, positive_slot] = True
+    candidate_roles = roles[candidates]
+    row_roles = roles[positive]
+
+    anchor_n = embeddings_n[anchor]
+    positive_n = embeddings_n[positive]
+    candidate_n = embeddings_n[candidates]
+    log_counts = counts.to(embeddings_n.dtype).log()
+
+    total = embeddings_n.new_zeros(())
+    for start in range(0, n, chunk_rows):
+        stop = min(start + chunk_rows, n)
+        valid = ~is_positive_of[anchor_slot[start:stop]] & (candidate_roles[None, :] == row_roles[start:stop, None])
+        if torch.is_grad_enabled():
+            total = total + checkpoint(
+                _inbatch_rows,
+                anchor_n[start:stop],
+                positive_n[start:stop],
+                candidate_n,
+                log_counts,
+                valid,
+                temperature,
+                use_reentrant=False,
+            )
+        else:
+            total = total + _inbatch_rows(
+                anchor_n[start:stop], positive_n[start:stop], candidate_n, log_counts, valid, temperature
+            )
     return total / n
 
 

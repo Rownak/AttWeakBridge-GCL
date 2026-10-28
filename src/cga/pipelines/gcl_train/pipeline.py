@@ -321,6 +321,8 @@ class TrainStep:
             loss_kwargs = {"margin": loss_cfg.get("margin", 1.0)}
         elif loss_name == "infonce":
             loss_kwargs = {"temperature": loss_cfg.get("temperature", 0.1)}
+        elif loss_name == "infonce_inbatch":
+            loss_kwargs = {"temperature": loss_cfg.get("temperature", 0.1)}
         elif loss_name == "infonce_full":
             loss_kwargs = {
                 "temperature": loss_cfg.get("temperature", 0.05),
@@ -328,7 +330,7 @@ class TrainStep:
             }
         else:
             raise ConfigError(
-                f"Unknown gcl_train.loss.name '{loss_name}'; expected 'triplet', 'infonce' or 'infonce_full'"
+                f"Unknown gcl_train.loss.name '{loss_name}'; expected 'triplet', 'infonce', 'infonce_inbatch' or 'infonce_full'"
             )
 
         if model_cfg.get("encoder", "gcn") == "residual_adapter":
@@ -403,6 +405,12 @@ class TrainStep:
                 len(full_data.cand_rev),
             )
 
+        node_roles = None
+        if loss_name == "infonce_inbatch":
+            node_roles = torch.tensor(
+                [0 if role == "graph_1" else 1 for role in state.universe.graph_roles], device=ctx.device
+            )
+
         final_embeddings = train_model(
             model=model,
             text_features=state.text_features,
@@ -422,6 +430,7 @@ class TrainStep:
             log_every=train_cfg.get("log_every", 10),
             edge_type=state.edge_type,
             full_data=full_data,
+            node_roles=node_roles,
         )
         state.final_embeddings = final_embeddings
 

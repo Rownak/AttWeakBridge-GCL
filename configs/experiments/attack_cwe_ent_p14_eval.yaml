@@ -1,0 +1,22 @@
+# Sprint 11 Phase 11.14 -- negative-sampling ablation for A0 / A1 / A2 (top_k = 5, InfoNCE), pool view, per-technique set metrics only.
+#   uv run cga run evaluate --dataset attack_cwe_ent --experiment attack_cwe_ent_p14_eval --set evaluate.inputs.ingest_run=20261027T194643Z-5d3f8baf
+# Union gold only. All stores and models pinned by run id.
+# Method id: <model>-<variant>-k5. nce = explicit bottom-5 negatives (11.13 reference, reused); pos = positive-only (in-batch negatives, loss
+# infonce_inbatch); hard = cross-modal hard negatives (sampler s11c-rank_topk-k5-xhard, M = 50).
+evaluate:
+  methods:
+    - {method_id: mpnet-chunk, label: "mpnet-chunk (frozen)", kind: embedding_store, embedder_id: sentence_transformer-multi_qa_mpnet_dot_chunk_desc, ref: 20261027T194928Z-8cf38e55}
+    - {method_id: deepwalk, label: "DeepWalk (frozen)", kind: embedding_store, embedder_id: deepwalk-deepwalk, ref: 20261027T135210Z-3b18ba0c}
+    - {method_id: a0-nce-k5, label: "A0 full dual, bottom-5 negatives (11.13)", kind: gcl_run, model_id: ent-dual-gcn-infonce-mpnetc-s42, ref: 20261027T205648Z-2aeb3259}
+    - {method_id: a1-nce-k5, label: "A1 text-only GCN, bottom-5 negatives (11.13)", kind: gcl_run, model_id: ent-abl-text-gcn-nce-mpnetc-s42, ref: 20261027T232407Z-adc619c8}
+    - {method_id: a2-nce-k5, label: "A2 graph-only GCN, bottom-5 negatives (11.13)", kind: gcl_run, model_id: ent-abl-graph-gcn-nce-mpnetc-s42, ref: 20261027T232541Z-d91ebd8e}
+    - {method_id: a0-pos-k5, label: "A0 full dual, positive-only", kind: gcl_run, model_id: ent-p14-a0-pos-k5-mpnetc-s42, ref: 20261028T023713Z-eb4a8c99}
+    - {method_id: a1-pos-k5, label: "A1 text-only GCN, positive-only", kind: gcl_run, model_id: ent-p14-a1-pos-k5-mpnetc-s42, ref: 20261028T024655Z-1bedbfd1}
+    - {method_id: a2-pos-k5, label: "A2 graph-only GCN, positive-only", kind: gcl_run, model_id: ent-p14-a2-pos-k5-mpnetc-s42, ref: 20261028T025100Z-042149f3}
+    - {method_id: a0-hard-k5, label: "A0 full dual, cross-modal hard negatives", kind: gcl_run, model_id: ent-p14-a0-hard-k5-mpnetc-s42, ref: 20261028T024245Z-3809a000}
+    - {method_id: a1-hard-k5, label: "A1 text-only GCN, cross-modal hard negatives", kind: gcl_run, model_id: ent-p14-a1-hard-k5-mpnetc-s42, ref: 20261028T024917Z-8a12c39c}
+    - {method_id: a2-hard-k5, label: "A2 graph-only GCN, cross-modal hard negatives", kind: gcl_run, model_id: ent-p14-a2-hard-k5-mpnetc-s42, ref: 20261028T025322Z-47c176f6}
+  evaluations:
+    - evaluation_id: set_pool
+      kind: gold_set_retrieval
+      params: {ks: [1, 5, 10], split: test, target_pool: data/processed/attack_cwe_ent/target_pool_union.json}

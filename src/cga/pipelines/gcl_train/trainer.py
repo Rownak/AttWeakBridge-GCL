@@ -69,6 +69,7 @@ def train_model(
     log_every: int = 10,
     edge_type: torch.Tensor | None = None,
     full_data: FullSoftmaxData | None = None,
+    node_roles: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Run the full-batch training loop, writing per-epoch metrics and periodic checkpoints.
 
@@ -99,6 +100,8 @@ def train_model(
         full_data: Required when ``loss_name == "infonce_full"``. That loss replaces both
             views (``alpha`` is ignored); ``metrics.jsonl`` then records the forward term as
             ``loss_text`` and the reverse term as ``loss_graph``.
+        node_roles: Required when ``loss_name == "infonce_inbatch"``: ``(n_universe,)`` integer graph role
+            per universe row, used to keep in-batch candidates in the positive's graph.
 
     Returns:
         The final fused embeddings for every universe row, detached.
@@ -106,6 +109,8 @@ def train_model(
     loss_fn = loss_registry.get(loss_name)
     if loss_name == "infonce_full" and full_data is None:
         raise ValueError("loss 'infonce_full' needs full_data")
+    if loss_name == "infonce_inbatch" and node_roles is None:
+        raise ValueError("loss 'infonce_inbatch' needs node_roles")
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
     with metrics_path.open("w", encoding="utf-8") as metrics_file:
@@ -118,6 +123,15 @@ def train_model(
 
             if loss_name == "infonce_full":
                 loss, loss_text, loss_graph = loss_fn(embeddings, full_data, **loss_kwargs)
+            elif loss_name == "infonce_inbatch":
+                # Positive-only: the negative columns are not read.
+                loss_text = loss_fn(
+                    embeddings, train_examples.anchor, train_examples.text_pos, node_roles, **loss_kwargs
+                )
+                loss_graph = loss_fn(
+                    embeddings, train_examples.anchor, train_examples.graph_pos, node_roles, **loss_kwargs
+                )
+                loss = alpha * loss_text + (1 - alpha) * loss_graph
             else:
                 loss_text = loss_fn(
                     embeddings[train_examples.anchor],

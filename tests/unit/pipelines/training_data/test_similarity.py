@@ -54,3 +54,20 @@ def test_compute_text_similarity_skips_ids_missing_from_store():
 
     assert sim.row_ids == ["a:1"]  # a:2 absent from text_matrix, skipped not raised
     assert sim.col_ids == ["b:1"]
+
+
+def test_text_within_similarity_is_square_per_role_and_skips_held_out():
+    from cga.data.aligned import AlignedMatrix
+    from cga.pipelines.training_data.similarity import compute_text_within_similarity
+
+    matrix = AlignedMatrix(
+        vectors=np.array([[1.0, 0.0], [0.0, 1.0], [1.0, 1.0], [3.0, 0.0]], dtype=np.float32),
+        node_ids=["a:1", "a:2", "a:3", "b:1"],
+    )
+    roles = {"a:1": "graph_1", "a:2": "graph_1", "a:3": "graph_1", "b:1": "graph_2"}
+    sim = compute_text_within_similarity(
+        matrix, role="graph_1", graph_role_by_node=roles, held_out_by_node={"a:3": True}
+    )
+    assert sim.row_ids == sim.col_ids == ["a:1", "a:2"]
+    assert sim.values.shape == (2, 2)
+    assert abs(sim.values[0, 0] - 1.0) < 1e-6 and abs(sim.values[0, 1]) < 1e-6

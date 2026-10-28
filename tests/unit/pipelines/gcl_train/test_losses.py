@@ -246,3 +246,76 @@ def test_infonce_with_repeated_negatives_matches_a_naive_in_batch_reference() ->
     assert infonce_loss(anchor, positive, negative, temperature=temperature, chunk_rows=2).item() == pytest.approx(
         expected.item(), rel=1e-5
     )
+
+
+# ---- infonce_inbatch (Sprint 11.14, positive-only) ---------------------------------------------
+
+
+def _inbatch_fixture():
+    """6 nodes: 0-2 graph_1 (role 0), 3-5 graph_2 (role 1); rows (anchor, positive) with shared anchors and positives."""
+    torch.manual_seed(0)
+    embeddings = torch.randn(6, 4, requires_grad=True)
+    roles = torch.tensor([0, 0, 0, 1, 1, 1])
+    anchor = torch.tensor([0, 0, 1, 2, 4, 5])
+    positive = torch.tensor([3, 4, 5, 3, 1, 2])
+    return embeddings, roles, anchor, positive
+
+
+def _inbatch_reference(embeddings, roles, anchor, positive, temperature):
+    """Plain per-row loop: own positive against every other row's positive of the same role, minus the anchor's positives."""
+    unit = torch.nn.functional.normalize(embeddings, dim=1)
+    rows = []
+    for i in range(len(anchor)):
+        positives_of_anchor = {int(p) for a, p in zip(anchor, positive) if int(a) == int(anchor[i])}
+        logits = [unit[anchor[i]] @ unit[positive[i]] / temperature]
+        for j in range(len(anchor)):  # one candidate per occurrence in the batch
+            c = int(positive[j])
+            if c in positives_of_anchor or int(roles[c]) != int(roles[positive[i]]):
+                continue
+            logits.append(unit[anchor[i]] @ unit[c] / temperature)
+        rows.append(-torch.log_softmax(torch.stack(logits), dim=0)[0])
+    return torch.stack(rows).mean()
+
+
+def test_infonce_inbatch_matches_a_naive_masked_reference() -> None:
+    from cga.pipelines.gcl_train.losses import infonce_inbatch_loss
+
+    embeddings, roles, anchor, positive = _inbatch_fixture()
+    expected = _inbatch_reference(embeddings, roles, anchor, positive, 0.1)
+    got = infonce_inbatch_loss(embeddings, anchor, positive, roles, temperature=0.1)
+    assert got.item() == pytest.approx(expected.item(), rel=1e-5)
+    grad_got = torch.autograd.grad(got, embeddings)[0]
+    grad_expected = torch.autograd.grad(expected, embeddings)[0]
+    assert torch.allclose(grad_got, grad_expected, atol=1e-5)
+
+
+def test_infonce_inbatch_chunking_does_not_change_value_or_gradient() -> None:
+    from cga.pipelines.gcl_train.losses import infonce_inbatch_loss
+
+    embeddings, roles, anchor, positive = _inbatch_fixture()
+    whole = infonce_inbatch_loss(embeddings, anchor, positive, roles, chunk_rows=64)
+    chunked = infonce_inbatch_loss(embeddings, anchor, positive, roles, chunk_rows=1)
+    assert chunked.item() == pytest.approx(whole.item(), rel=1e-6)
+    assert torch.allclose(
+        torch.autograd.grad(chunked, embeddings)[0], torch.autograd.grad(whole, embeddings)[0], atol=1e-6
+    )
+
+
+def test_infonce_inbatch_masks_the_anchors_own_positives() -> None:
+    from cga.pipelines.gcl_train.losses import infonce_inbatch_loss
+
+    # One anchor with two positives (3 and 4) and nothing else of role 1: every candidate is masked,
+    # so the denominator is the positive alone and the loss is exactly zero.
+    embeddings = torch.randn(5, 4)
+    roles = torch.tensor([0, 0, 0, 1, 1])
+    loss = infonce_inbatch_loss(embeddings, torch.tensor([0, 0]), torch.tensor([3, 4]), roles)
+    assert loss.item() == pytest.approx(0.0, abs=1e-7)
+
+
+def test_infonce_inbatch_is_finite_and_reproducible() -> None:
+    from cga.pipelines.gcl_train.losses import infonce_inbatch_loss
+
+    embeddings, roles, anchor, positive = _inbatch_fixture()
+    a = infonce_inbatch_loss(embeddings, anchor, positive, roles)
+    b = infonce_inbatch_loss(embeddings, anchor, positive, roles)
+    assert torch.isfinite(a) and a.item() == b.item()

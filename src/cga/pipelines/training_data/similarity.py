@@ -81,6 +81,28 @@ def compute_text_similarity(
     return SimilarityMatrix(row_ids=row_ids, col_ids=col_ids, values=values)
 
 
+def compute_text_within_similarity(
+    text_matrix: AlignedMatrix,
+    *,
+    role: str,
+    graph_role_by_node: dict[str, str],
+    held_out_by_node: dict[str, bool],
+) -> SimilarityMatrix:
+    """Within-graph cosine similarity in text-embedding space for one ``graph_role``.
+
+    Used by the ``cross_modal_hard`` negatives to ask how text-similar two nodes of the same graph
+    are. Same eligibility as :func:`compute_text_similarity`: ids present in ``text_matrix`` and not
+    ``held_out``.
+    """
+    by_role = _eligible_ids_by_role(graph_role_by_node, held_out_by_node)
+    text_ids = set(text_matrix.node_ids)
+    ids = [nid for nid in by_role[role] if nid in text_ids]
+
+    vectors = text_matrix.select(ids).vectors if ids else np.empty((0, text_matrix.vectors.shape[1]))
+    values = _cosine_similarity(vectors, vectors)
+    return SimilarityMatrix(row_ids=ids, col_ids=ids, values=values)
+
+
 def compute_graph_similarity(
     graph_matrix: AlignedMatrix,
     *,
