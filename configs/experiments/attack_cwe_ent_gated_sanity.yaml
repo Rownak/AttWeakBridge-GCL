@@ -1,0 +1,20 @@
+# Sprint 12 Phase 12.5 -- sanity check: G4 (gate fixed to 0, z = LayerNorm(x)) against frozen mpnet-chunk, Sprint 3 proxy protocol (as attack_cwe_ent_paper_compare.yaml).
+evaluate:
+  methods:
+    - {method_id: mpnet-chunk, label: "mpnet-chunk (frozen)", kind: embedding_store, embedder_id: sentence_transformer-multi_qa_mpnet_dot_chunk_desc, ref: 20261027T194928Z-8cf38e55}
+    - {method_id: g4, label: "G4 gate fixed 0", kind: gcl_run, model_id: ent-g4-gated-mpnetc-s42, ref: 20261028T153136Z-3749de5e}
+  evaluations:
+    - evaluation_id: neigh
+      kind: neighborhood
+      params:
+        ks: [1, 5, 10, 20]
+        roles: [graph_1, graph_2]
+        views:
+          - {view_id: structural_r1, provider: hop_radius, params: {radius: 1}}
+          - {view_id: structural_r2, provider: hop_radius, params: {radius: 2}}
+          - {view_id: textual, provider: cosine_top_k,
+             params: {top_k: 10, reference: {kind: embedding_store, embedder_id: hf_mean_pool-pt_SecRoBERTa_desc, ref: 20261027T200841Z-09088f9f}}}
+    - evaluation_id: clusters
+      kind: cluster_quality
+      params: {roles: [graph_1, graph_2], n_clusters: [2, 4, 8, 16, 32]}
+  visualize: {enabled: false}

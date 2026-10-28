@@ -1,0 +1,32 @@
+# Sprint 12 Phase 12.6 -- gated residual models next to the Phase 12.3 rows, Sprint 3 proxy protocol, run as:
+#   uv run cga run evaluate --dataset attack_cwe_ent --experiment attack_cwe_ent_paper_gated \
+#       --set evaluate.inputs.ingest_run=20261027T194643Z-5d3f8baf
+# Same views, ks, roles and textual reference as attack_cwe_ent_paper_compare.yaml, so the five Phase 12.3 rows are
+# directly comparable. Every store and model is pinned by run id (no `latest`); nothing is retrained here.
+# G2 residual without gate, G3 gated residual (text), G4 gate fixed to 0 (sanity), G5 gated dual (text + DeepWalk); seed 42.
+evaluate:
+  methods:
+    - {method_id: mpnet-chunk, label: "mpnet-chunk (frozen)", kind: embedding_store, embedder_id: sentence_transformer-multi_qa_mpnet_dot_chunk_desc, ref: 20261027T194928Z-8cf38e55}
+    - {method_id: deepwalk,    label: "DeepWalk (frozen)",    kind: embedding_store, embedder_id: deepwalk-deepwalk,                                    ref: 20261027T135210Z-3b18ba0c}
+    - {method_id: a0, label: "A0 full dual GCN",  kind: gcl_run, model_id: ent-dual-gcn-infonce-mpnetc-s42,  ref: 20261027T205648Z-2aeb3259}
+    - {method_id: a1, label: "A1 text-only GCN",  kind: gcl_run, model_id: ent-abl-text-gcn-nce-mpnetc-s42,   ref: 20261027T232407Z-adc619c8}
+    - {method_id: a2, label: "A2 graph-only GCN", kind: gcl_run, model_id: ent-abl-graph-gcn-nce-mpnetc-s42,  ref: 20261027T232541Z-d91ebd8e}
+    - {method_id: g2, label: "G2 residual, no gate",        kind: gcl_run, model_id: ent-g2-gated-mpnetc-s42, ref: 20261028T154339Z-6f4468f5}
+    - {method_id: g3, label: "G3 gated residual (text)",    kind: gcl_run, model_id: ent-g3-gated-mpnetc-s42, ref: 20261028T153145Z-bd1e8273}
+    - {method_id: g4, label: "G4 gate fixed 0",             kind: gcl_run, model_id: ent-g4-gated-mpnetc-s42, ref: 20261028T153136Z-3749de5e}
+    - {method_id: g5, label: "G5 gated dual",               kind: gcl_run, model_id: ent-g5-gated-mpnetc-s42, ref: 20261028T154340Z-fdcd6c82}
+  evaluations:
+    - evaluation_id: neigh
+      kind: neighborhood
+      params:
+        ks: [1, 5, 10, 20]
+        roles: [graph_1, graph_2]
+        views:
+          - {view_id: structural_r1, provider: hop_radius, params: {radius: 1}}
+          - {view_id: structural_r2, provider: hop_radius, params: {radius: 2}}
+          - {view_id: textual, provider: cosine_top_k,
+             params: {top_k: 10, reference: {kind: embedding_store, embedder_id: hf_mean_pool-pt_SecRoBERTa_desc, ref: 20261027T200841Z-09088f9f}}}
+    - evaluation_id: clusters
+      kind: cluster_quality
+      params: {roles: [graph_1, graph_2], n_clusters: [2, 4, 8, 16, 32]}
+  visualize: {enabled: true, methods: [g3, g5]}

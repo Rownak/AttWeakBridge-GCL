@@ -38,7 +38,11 @@ from cga.data.example_store import read_examples
 from cga.data.graph_store import read_alignments, read_edges
 from cga.pipelines.gcl_train import losses as _losses  # noqa: F401  (registers triplet/infonce/infonce_full)
 from cga.pipelines.gcl_train.losses import build_full_softmax_data, sample_pairs_by_source
-from cga.pipelines.gcl_train.models import build_dual_encoder, build_residual_adapter_encoder
+from cga.pipelines.gcl_train.models import (
+    build_dual_encoder,
+    build_gated_residual_encoder,
+    build_residual_adapter_encoder,
+)
 from cga.pipelines.gcl_train.rewire import rewire_edges
 from cga.pipelines.gcl_train.trainer import ExampleTensors, sha256_of_universe, train_model
 
@@ -346,6 +350,16 @@ class TrainStep:
                 graph_branch=bool(model_cfg.get("graph_branch", False)),
                 graph_dim=state.struct_features.shape[1],
             ).to(ctx.device)
+        elif model_cfg.get("encoder", "gcn") == "residual_gated":
+            model = build_gated_residual_encoder(
+                text_dim=state.text_features.shape[1],
+                graph_dim=state.struct_features.shape[1],
+                adapter_dim=model_cfg.get("adapter_dim", 128),
+                gate=model_cfg.get("gate", "learned"),
+                graph_branch=bool(model_cfg.get("graph_branch", False)),
+                gate_bias_init=model_cfg.get("gate_bias_init", -4.0),
+                norm=model_cfg.get("norm", "layernorm"),
+            ).to(ctx.device)
         else:
             model = build_dual_encoder(
                 text_dim=state.text_features.shape[1],
@@ -374,9 +388,17 @@ class TrainStep:
         optimizer_name = optim_cfg.get("name", "adam")
         if optimizer_name != "adam":
             raise ConfigError(f"Unknown gcl_train.optim.name '{optimizer_name}'; only 'adam' is supported")
-        optimizer = torch.optim.Adam(
-            model.parameters(), lr=optim_cfg.get("lr", 1.0e-3), weight_decay=optim_cfg.get("weight_decay", 0.0)
-        )
+        base_wd = optim_cfg.get("weight_decay", 0.0)
+        param_groups: Any = model.parameters()
+        if model_cfg.get("encoder", "gcn") == "residual_gated" and model.gate_parameters():
+            # The gate weights get their own (small) weight decay so a gate stuck near 0 is not pushed to it by the
+            # other parameters' setting; every other parameter keeps the global value.
+            gate_ids = {id(q) for q in model.gate_parameters()}
+            param_groups = [
+                {"params": [q for q in model.parameters() if id(q) not in gate_ids], "weight_decay": base_wd},
+                {"params": model.gate_parameters(), "weight_decay": model_cfg.get("gate_weight_decay", 1.0e-4)},
+            ]
+        optimizer = torch.optim.Adam(param_groups, lr=optim_cfg.get("lr", 1.0e-3), weight_decay=base_wd)
 
         universe_sha256 = sha256_of_universe(state.universe.node_ids)
 
@@ -452,6 +474,13 @@ class ExportStep:
         export_dir = ctx.run_dir / "node_embeddings"
         matrix.save(export_dir)
         ctx.logger.info("export: wrote %d x %d node_embeddings to %s", *vectors.shape, export_dir)
+        if hasattr(state.model, "gate_values"):
+            assert state.text_features is not None and state.struct_features is not None and state.edge_index is not None
+            state.model.eval()
+            gate = state.model.gate_values(state.text_features, state.struct_features, state.edge_index)
+            if gate is not None:
+                np.save(export_dir / "gate.npy", gate.cpu().numpy().astype(np.float32, copy=False))
+                ctx.logger.info("export: wrote gate scores %s", tuple(gate.shape))
 
 
 class ManifestStep:
@@ -477,6 +506,7 @@ class ManifestStep:
             ("metrics", ctx.run_dir / "metrics.jsonl"),
             ("node_embeddings_vectors", ctx.run_dir / "node_embeddings" / "vectors.npy"),
             ("node_embeddings_index", ctx.run_dir / "node_embeddings" / "index.parquet"),
+            ("node_embeddings_gate", ctx.run_dir / "node_embeddings" / "gate.npy"),
         ):
             if path.is_file():
                 ctx.manifest.record_output(name, path)

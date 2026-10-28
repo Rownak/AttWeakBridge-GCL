@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch_geometric.nn import GATConv, GCNConv
 
 
@@ -516,4 +517,202 @@ def build_residual_adapter_encoder(
         gat_heads=gat_heads,
         graph_branch=graph_branch,
         graph_dim=graph_dim,
+    )
+
+
+_GATES = ("learned", "none", "fixed_zero")
+_NORMS = ("layernorm", "none")
+
+
+def _propagate(x: torch.Tensor, edge_index: torch.Tensor) -> torch.Tensor:
+    """Compute ``Â x`` with the GCN normalisation ``D^-1/2 (A + I) D^-1/2`` (self-loops added).
+
+    Args:
+        x: ``(n, d)`` node features.
+        edge_index: ``(2, e)`` message edges, row 0 = source, row 1 = target (already symmetrised).
+
+    Returns:
+        ``(n, d)`` propagated features. An isolated node keeps its own features (self-loop only).
+    """
+    n = x.shape[0]
+    loops = torch.arange(n, device=x.device)
+    src = torch.cat([edge_index[0], loops])
+    dst = torch.cat([edge_index[1], loops])
+    degree = torch.zeros(n, device=x.device, dtype=x.dtype).index_add_(
+        0, dst, torch.ones(dst.shape[0], device=x.device, dtype=x.dtype)
+    )
+    inv_sqrt = degree.pow(-0.5)
+    weight = inv_sqrt[src] * inv_sqrt[dst]
+    return torch.zeros_like(x).index_add_(0, dst, weight.unsqueeze(1) * x[src])
+
+
+class GatedResidualEncoder(nn.Module):
+    """Gated residual graph adapter over frozen text: ``z = LN(x + g ⊙ f(Â X))``.
+
+    The frozen text vector ``x`` is kept as the base and a small graph transform ``f`` of the propagated features is
+    added through a learned per-node, per-dimension gate ``g = sigmoid(W_g [x ‖ Â X] + b_g)`` whose bias starts at
+    ``gate_bias_init`` (gate about 0), so the untrained model is ``LN(x)`` and structure enters only where it lowers
+    the loss (``design_docs/gcl_method_update.md`` section 3). It sits in ``gcl_train`` beside :class:`DualEncoder`,
+    selected by ``gcl_train.model.encoder: residual_gated``; ``evaluate`` scores the exported ``z`` unchanged.
+
+    Text variant (``graph_branch=False``)::
+
+        z_i = LN( x_i + g_i ⊙ f_t(Â X)_i ),   f_t = Linear(d, r) - ReLU - Linear(r, d)
+
+    Dual variant (``graph_branch=True``, ``s`` = DeepWalk features): the gates arbitrate between the text and the
+    graph signal instead of concatenating them::
+
+        z_i = LN( x_i + g^t_i ⊙ f_t(Â X)_i + g^s_i ⊙ f_s(Â S)_i ),   g^s_i = sigmoid(W_s [x_i ‖ (Â S)_i] + b_s)
+
+    The last layer of every ``f`` starts at std 1e-3 / zero bias and every gate weight at std 1e-3, so the initial gate
+    is ``sigmoid(gate_bias_init)`` for all nodes. ``x`` and ``s`` are detached (frozen inputs).
+
+    Args:
+        text_dim: Width ``d`` of the text input (and of ``z``).
+        graph_dim: Width of the structural input ``s`` (used only with ``graph_branch``).
+        adapter_dim: Bottleneck width ``r`` of each ``f``.
+        gate: ``"learned"`` (gate above), ``"none"`` (``g = 1``: ``z = LN(x + f(ÂX))``) or ``"fixed_zero"``
+            (``g = 0``: ``z = LN(x)``, no trainable parameters).
+        graph_branch: Add the DeepWalk branch.
+        gate_bias_init: Initial gate bias (default ``-4``, gate about 0.018).
+        norm: ``"layernorm"`` (parameter-free ``LayerNorm``) or ``"none"`` (control that isolates the effect of LN).
+
+    Raises:
+        ValueError: On an unknown ``gate`` or ``norm``.
+    """
+
+    def __init__(
+        self,
+        *,
+        text_dim: int = 768,
+        graph_dim: int = 128,
+        adapter_dim: int = 128,
+        gate: str = "learned",
+        graph_branch: bool = False,
+        gate_bias_init: float = -4.0,
+        norm: str = "layernorm",
+    ) -> None:
+        super().__init__()
+        if gate not in _GATES:
+            raise ValueError(f"Unknown gate '{gate}'; expected one of {_GATES}")
+        if norm not in _NORMS:
+            raise ValueError(f"Unknown norm '{norm}'; expected one of {_NORMS}")
+        self.text_dim = text_dim
+        self.gate = gate
+        self.graph_branch = graph_branch
+        self.norm = norm
+        if gate == "fixed_zero":
+            return  # nothing trainable: z = LN(x)
+        self.f_text = self._transform(text_dim, adapter_dim, text_dim)
+        if gate == "learned":
+            self.w_gate_text = self._gate_layer(2 * text_dim, text_dim, gate_bias_init)
+        if graph_branch:
+            self.f_graph = self._transform(graph_dim, adapter_dim, text_dim)
+            if gate == "learned":
+                self.w_gate_graph = self._gate_layer(text_dim + graph_dim, text_dim, gate_bias_init)
+
+    @staticmethod
+    def _transform(in_dim: int, hidden: int, out_dim: int) -> nn.Sequential:
+        """``Linear - ReLU - Linear`` whose last layer starts at std 1e-3 / zero bias."""
+        net = nn.Sequential(nn.Linear(in_dim, hidden), nn.ReLU(), nn.Linear(hidden, out_dim))
+        nn.init.normal_(net[-1].weight, std=1e-3)
+        nn.init.zeros_(net[-1].bias)
+        return net
+
+    @staticmethod
+    def _gate_layer(in_dim: int, out_dim: int, bias_init: float) -> nn.Linear:
+        """Gate projection with weights at std 1e-3 and the bias at ``bias_init``."""
+        layer = nn.Linear(in_dim, out_dim)
+        nn.init.normal_(layer.weight, std=1e-3)
+        nn.init.constant_(layer.bias, bias_init)
+        return layer
+
+    def gate_parameters(self) -> list[nn.Parameter]:
+        """Return the gate projection parameters (the group that gets its own weight decay)."""
+        return [p for name, p in self.named_parameters() if name.startswith("w_gate_")]
+
+    def _terms(
+        self, text_emb: torch.Tensor, struct_emb: torch.Tensor, edge_index: torch.Tensor
+    ) -> list[tuple[torch.Tensor, torch.Tensor]]:
+        """Return ``(transform output, gate)`` per branch; the gate is ``1`` for ``gate: none``."""
+        x = text_emb.detach()
+        ax = _propagate(x, edge_index)
+        h = self.f_text(ax)
+        g = torch.sigmoid(self.w_gate_text(torch.cat([x, ax], dim=1))) if self.gate == "learned" else torch.ones_like(h)
+        terms = [(h, g)]
+        if self.graph_branch:
+            a_s = _propagate(struct_emb.detach(), edge_index)
+            h_s = self.f_graph(a_s)
+            g_s = (
+                torch.sigmoid(self.w_gate_graph(torch.cat([x, a_s], dim=1)))
+                if self.gate == "learned"
+                else torch.ones_like(h_s)
+            )
+            terms.append((h_s, g_s))
+        return terms
+
+    def forward(
+        self,
+        text_emb: torch.Tensor,
+        struct_emb: torch.Tensor,
+        edge_index: torch.Tensor,
+        edge_type: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Return ``z`` for every node.
+
+        Args:
+            text_emb: ``(n, d)`` frozen text embeddings.
+            struct_emb: ``(n, graph_dim)`` structural embeddings (used only with ``graph_branch``).
+            edge_index: ``(2, e)`` symmetrised message edges.
+            edge_type: Accepted for interface parity with the other encoders and ignored.
+
+        Returns:
+            ``(n, d)`` embeddings.
+        """
+        h = text_emb.detach()
+        if self.gate != "fixed_zero":
+            for transformed, g in self._terms(text_emb, struct_emb, edge_index):
+                h = h + g * transformed
+        return F.layer_norm(h, (self.text_dim,)) if self.norm == "layernorm" else h
+
+    @torch.no_grad()
+    def gate_values(
+        self, text_emb: torch.Tensor, struct_emb: torch.Tensor, edge_index: torch.Tensor
+    ) -> torch.Tensor | None:
+        """Return the per-node trust score: the gate averaged over the ``d`` dimensions.
+
+        Args:
+            text_emb: ``(n, d)`` frozen text embeddings.
+            struct_emb: ``(n, graph_dim)`` structural embeddings.
+            edge_index: ``(2, e)`` symmetrised message edges.
+
+        Returns:
+            ``(n,)`` mean gate (text variant) or ``(n, 2)`` with the text and graph gates (dual variant);
+            ``None`` unless ``gate == "learned"``.
+        """
+        if self.gate != "learned":
+            return None
+        scores = [g.mean(dim=1) for _, g in self._terms(text_emb, struct_emb, edge_index)]
+        return torch.stack(scores, dim=1) if self.graph_branch else scores[0]
+
+
+def build_gated_residual_encoder(
+    *,
+    text_dim: int = 768,
+    graph_dim: int = 128,
+    adapter_dim: int = 128,
+    gate: str = "learned",
+    graph_branch: bool = False,
+    gate_bias_init: float = -4.0,
+    norm: str = "layernorm",
+) -> GatedResidualEncoder:
+    """Construct a :class:`GatedResidualEncoder` (see its docstring for the arguments)."""
+    return GatedResidualEncoder(
+        text_dim=text_dim,
+        graph_dim=graph_dim,
+        adapter_dim=adapter_dim,
+        gate=gate,
+        graph_branch=graph_branch,
+        gate_bias_init=gate_bias_init,
+        norm=norm,
     )
