@@ -78,17 +78,17 @@ run id here, and say so in the log. Nothing is regenerated otherwise.
 
 ## Phase 12.3 — Evaluate and plot (Sprint 3 protocol)
 
-- [ ] `configs/experiments/attack_cwe_ent_paper_compare.yaml` (modelled on `ncit_doid_neighborhood_compare.yaml`):
+- [x] `configs/experiments/attack_cwe_ent_paper_compare.yaml` (modelled on `ncit_doid_neighborhood_compare.yaml`):
       5 methods pinned by run id — `mpnet-chunk`, `deepwalk` (`embedding_store`), `a0`, `a1`, `a2` (`gcl_run`);
       evaluation `neigh` (`neighborhood`, `ks [1, 5, 10, 20]`, roles `graph_1` / `graph_2`, views `structural_r1`
       (`hop_radius`, radius 1), `structural_r2` (radius 2), `textual` (`cosine_top_k`, `top_k 10`, reference the pinned
       SecRoBERTa store)); evaluation `clusters` (`cluster_quality`, `n_clusters [2, 4, 8, 16, 32]`);
       `visualize: {enabled: true, methods: [a0, a1, a2]}`.
-- [ ] `configs/plots/attack_cwe_ent_paper_compare.yaml` (modelled on `ncit_doid_neighborhood_compare.yaml`):
+- [x] `configs/plots/attack_cwe_ent_paper_compare.yaml` (modelled on `ncit_doid_neighborhood_compare.yaml`):
       `precision_at_k` line figure (`neigh`, `normalized_precision_at_k`, x `param_value`, hue `method_label`, facet
       `[view_id, graph_role]`), `silhouette` line figure (`clusters`, facet `[graph_role]`), `loss_curves` enabled,
       `plot.inputs.evaluate_run` pinned to the Phase 12.3 evaluate run.
-- [ ] Run, then repeat once:
+- [x] Run, then repeat once:
       ```
       uv run cga run evaluate --dataset attack_cwe_ent --experiment attack_cwe_ent_paper_compare \
         --set evaluate.inputs.ingest_run=20261027T194643Z-5d3f8baf
@@ -104,17 +104,17 @@ dataset (it cannot be filtered without a code change); only the A0 / A1 / A2 cur
 
 ## Phase 12.4 — Paper table and package
 
-- [ ] One comparison table, built by a small script `scripts/paper_proxy_table.py` (reads the evaluate run's
+- [x] One comparison table, built by a small script `scripts/paper_proxy_table.py` (reads the evaluate run's
       `metrics.parquet`; writes `paper_table.md` and `paper_table.csv` next to it). Rows: the 5 methods. Columns, as in
       Sprint 3: MRR and normalized precision@10 for `structural_r1`, `structural_r2` and `textual`, each per graph
       (ATT&CK = `graph_1`, CWE = `graph_2`), and the silhouette mean over `n_clusters` 2–32 and both graphs. Best per
       column in bold. Unit test on a hand-built `metrics.parquet` fixture.
-- [ ] Package for the paper: `artifacts/paper/attack_cwe_ent/sprint_12/` with `paper_table.md` / `.csv`, the two
+- [x] Package for the paper: `artifacts/paper/attack_cwe_ent/sprint_12/` with `paper_table.md` / `.csv`, the two
       figures, the A0 / A1 / A2 loss curves and projections, and `runs.yaml` (every pinned run id from this file, the
       evaluate and plot run ids, and the exact commands).
-- [ ] Short reading in the log (no tuning): which rows lead on structural views, on the textual view and on
+- [x] Short reading in the log (no tuning): which rows lead on structural views, on the textual view and on
       silhouette; where A0 / A1 / A2 sit between the two frozen baselines.
-- [ ] Caveats in the log, carried into the paper text: proxy relevance sets, not gold labels; neighborhoods are scored
+- [x] Caveats in the log, carried into the paper text: proxy relevance sets, not gold labels; neighborhoods are scored
       within each graph, so these metrics do not measure ATT&CK → CWE alignment; the `textual` reference
       (SecRoBERTa) is itself a text encoder, so text-based rows have an advantage there; single seed.
 

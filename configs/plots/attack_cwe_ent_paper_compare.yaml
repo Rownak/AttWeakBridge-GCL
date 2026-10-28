@@ -1,0 +1,15 @@
+# Sprint 12 Phase 12.3 -- figures for the attack_cwe_ent_paper_compare evaluate run, run as:
+#   uv run cga run plot --dataset attack_cwe_ent --config configs/plots/attack_cwe_ent_paper_compare.yaml
+# Pinned to the Phase 12.3 evaluate run (the first of two identical runs).
+plot:
+  inputs:
+    evaluate_run: 20261028T044615Z-b20dd0c5
+  figures:
+    - {figure_id: precision_at_k, kind: line,
+       select: {evaluation_id: neigh, metric_name: normalized_precision_at_k},
+       x: param_value, hue: method_label, facet: [view_id, graph_role]}
+    - {figure_id: silhouette, kind: line,
+       select: {evaluation_id: clusters, metric_name: silhouette},
+       x: param_value, hue: method_label, facet: [graph_role]}
+  loss_curves:
+    enabled: true                     # one PNG per model_id under the dataset; only A0 / A1 / A2 go into the paper package
