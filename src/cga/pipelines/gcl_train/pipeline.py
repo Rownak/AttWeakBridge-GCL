@@ -352,6 +352,8 @@ class TrainStep:
                 hidden_dim=model_cfg.get("hidden_dim", 128),
                 out_dim=model_cfg.get("out_dim", 128),
                 gat_heads=tuple(model_cfg.get("gat_heads", [8, 1])),
+                branch=model_cfg.get("branch", "both"),
+                message_passing=bool(model_cfg.get("message_passing", True)),
             ).to(ctx.device)
         state.model = model
         state.n_trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)

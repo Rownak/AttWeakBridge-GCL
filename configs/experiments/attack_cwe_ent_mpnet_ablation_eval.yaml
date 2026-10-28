@@ -1,0 +1,35 @@
+# Sprint 11 Phase 11.12 -- ablation of the mpnet-chunk InfoNCE dual (single-branch encoders), same six evaluations as 11.11.
+#   uv run cga run evaluate --dataset attack_cwe_ent --experiment attack_cwe_ent_mpnet_ablation_eval #       --set evaluate.inputs.ingest_run=<11.10 ingest run of that source>
+# All stores and models are pinned by run id. A0 is the 11.11 InfoNCE model (its retrain with the new code is bit-identical, 20261027T232219Z-0bded1cb).
+# A1/A1-rerun are bit-identical (20261027T232407Z / 20261027T233417Z-adc619c8). Cosine only.
+evaluate:
+  methods:
+    - {method_id: ent-mpnet-chunk, label: "mpnet, chunked (frozen)", kind: embedding_store, embedder_id: sentence_transformer-multi_qa_mpnet_dot_chunk_desc, ref: 20261027T194928Z-8cf38e55}
+    - {method_id: ent-dw, label: "DeepWalk (frozen)", kind: embedding_store, embedder_id: deepwalk-deepwalk, ref: 20261027T135210Z-3b18ba0c}
+    - {method_id: ent-a1-text, label: "A1 text-only GCN (mpnet)", kind: gcl_run, model_id: ent-abl-text-gcn-nce-mpnetc-s42, ref: 20261027T232407Z-adc619c8}
+    - {method_id: ent-a2-graph, label: "A2 graph-only GCN (DeepWalk)", kind: gcl_run, model_id: ent-abl-graph-gcn-nce-mpnetc-s42, ref: 20261027T232541Z-d91ebd8e}
+    - {method_id: ent-a3-text-lin, label: "A3 text-only, no GCN", kind: gcl_run, model_id: ent-abl-text-lin-nce-mpnetc-s42, ref: 20261027T232717Z-166677e3}
+    - {method_id: ent-a4-graph-lin, label: "A4 graph-only, no GCN", kind: gcl_run, model_id: ent-abl-graph-lin-nce-mpnetc-s42, ref: 20261027T233035Z-b8df0fe0}
+    - {method_id: ent-a0-full, label: "A0 full dual GCN (11.11)", kind: gcl_run, model_id: ent-dual-gcn-infonce-mpnetc-s42, ref: 20261027T205648Z-2aeb3259}
+    - {method_id: ent-rand-s42, label: "Random ranking", kind: embedding_store, embedder_id: random-rand42, ref: latest}
+    - {method_id: ent-rand-s43, label: "Random ranking", kind: embedding_store, embedder_id: random-rand43, ref: latest}
+    - {method_id: ent-rand-s44, label: "Random ranking", kind: embedding_store, embedder_id: random-rand44, ref: latest}
+  evaluations:
+    - evaluation_id: gold_full
+      kind: gold_alignment
+      params: {ks: [1, 5, 10], split: test, modes: [global], sibling_filter_splits: [test]}
+    - evaluation_id: prf_full
+      kind: gold_alignment_prf
+      params: {split: test, assignment: greedy_one_to_one, top_k: 3, threshold: 0.0, biogitom_filters: false}
+    - evaluation_id: gold_pool
+      kind: gold_alignment
+      params: {ks: [1, 5, 10], split: test, modes: [global], sibling_filter_splits: [test], target_pool: data/processed/attack_cwe_ent/target_pool_union.json}
+    - evaluation_id: prf_pool
+      kind: gold_alignment_prf
+      params: {split: test, assignment: greedy_one_to_one, top_k: 3, threshold: 0.0, biogitom_filters: false, target_pool: data/processed/attack_cwe_ent/target_pool_union.json}
+    - evaluation_id: set_full
+      kind: gold_set_retrieval
+      params: {ks: [1, 5, 10, 15, 20, 50], split: test}
+    - evaluation_id: set_pool
+      kind: gold_set_retrieval
+      params: {ks: [1, 5, 10, 15, 20, 50], split: test, target_pool: data/processed/attack_cwe_ent/target_pool_union.json}

@@ -137,6 +137,17 @@ ATTACK_ENT_MPNET_DUAL_ROWS = [
     ("ent-d-nce", "Dual GCN, SecRoBERTa 11.9 text, InfoNCE", "SecRoBERTa top-k", "InfoNCE"),
     ("ent-rand", "Random ranking", "–", "–"),
 ]
+# Sprint 11.12: ablation of the mpnet-chunk InfoNCE dual. Groups: frozen references, GCN single-branch, no-GCN single-branch, full dual.
+ATTACK_ENT_MPNET_ABLATION_ROWS = [
+    ("ent-mpnet-chunk", "mpnet, chunked (frozen)", "–", "–"),
+    ("ent-dw", "DeepWalk (frozen)", "–", "–"),
+    ("ent-a1-text", "A1 text-only GCN (mpnet)", "mpnet top-k", "InfoNCE"),
+    ("ent-a2-graph", "A2 graph-only GCN (DeepWalk)", "mpnet top-k", "InfoNCE"),
+    ("ent-a3-text-lin", "A3 text-only, no GCN", "mpnet top-k", "InfoNCE"),
+    ("ent-a4-graph-lin", "A4 graph-only, no GCN", "mpnet top-k", "InfoNCE"),
+    ("ent-a0-full", "A0 full dual GCN (11.11)", "mpnet top-k", "InfoNCE"),
+    ("ent-rand", "Random ranking", "–", "–"),
+]
 ROW_SETS = {
     "matrix": PAPER_ROWS,
     "deepwalk": DEEPWALK_ROWS,
@@ -150,6 +161,7 @@ ROW_SETS = {
     "attack_ent_encoders": ATTACK_ENT_ENCODERS_ROWS,
     "attack_ent_desc": ATTACK_ENT_DESC_ROWS,
     "attack_ent_mpnet_dual": ATTACK_ENT_MPNET_DUAL_ROWS,
+    "attack_ent_mpnet_ablation": ATTACK_ENT_MPNET_ABLATION_ROWS,
 }
 _COUNT_METRICS = {"n_predicted", "n_correct", "n_gold", "n_unique_sources", "n_unique_targets"}
 

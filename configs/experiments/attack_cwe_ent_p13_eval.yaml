@@ -1,0 +1,24 @@
+# Sprint 11 Phase 11.13 -- pseudo-pair top_k (5, 10) x loss (InfoNCE, triplet) for A0 / A1 / A2, pool view, per-technique set metrics only.
+#   uv run cga run evaluate --dataset attack_cwe_ent --experiment attack_cwe_ent_p13_eval --set evaluate.inputs.ingest_run=20261027T194643Z-5d3f8baf
+# Union gold only. All stores and models pinned by run id. k = 5 rows with an earlier model id are reused (11.11 / 11.12, bit-identical retrains).
+# Method id: <model>-<loss>-k<top_k>; A0 = both branches, A1 = text only, A2 = graph only.
+evaluate:
+  methods:
+    - {method_id: mpnet-chunk, label: "mpnet-chunk (frozen)", kind: embedding_store, embedder_id: sentence_transformer-multi_qa_mpnet_dot_chunk_desc, ref: 20261027T194928Z-8cf38e55}
+    - {method_id: deepwalk, label: "DeepWalk (frozen)", kind: embedding_store, embedder_id: deepwalk-deepwalk, ref: 20261027T135210Z-3b18ba0c}
+    - {method_id: a0-nce-k5, label: "A0 full dual, InfoNCE, k=5", kind: gcl_run, model_id: ent-dual-gcn-infonce-mpnetc-s42, ref: 20261027T205648Z-2aeb3259}
+    - {method_id: a0-trip-k5, label: "A0 full dual, triplet, k=5", kind: gcl_run, model_id: ent-dual-gcn-triplet-mpnetc-s42, ref: 20261027T205615Z-db28e05d}
+    - {method_id: a0-nce-k10, label: "A0 full dual, InfoNCE, k=10", kind: gcl_run, model_id: ent-p13-a0-nce-k10-mpnetc-s42, ref: 20261028T013227Z-4ae182b9}
+    - {method_id: a0-trip-k10, label: "A0 full dual, triplet, k=10", kind: gcl_run, model_id: ent-p13-a0-trip-k10-mpnetc-s42, ref: 20261028T013624Z-a42425b9}
+    - {method_id: a1-nce-k5, label: "A1 text-only GCN, InfoNCE, k=5", kind: gcl_run, model_id: ent-abl-text-gcn-nce-mpnetc-s42, ref: 20261027T232407Z-adc619c8}
+    - {method_id: a1-trip-k5, label: "A1 text-only GCN, triplet, k=5", kind: gcl_run, model_id: ent-p13-a1-trip-k5-mpnetc-s42, ref: 20261028T013128Z-3ec036f3}
+    - {method_id: a1-nce-k10, label: "A1 text-only GCN, InfoNCE, k=10", kind: gcl_run, model_id: ent-p13-a1-nce-k10-mpnetc-s42, ref: 20261028T013822Z-b0e71713}
+    - {method_id: a1-trip-k10, label: "A1 text-only GCN, triplet, k=10", kind: gcl_run, model_id: ent-p13-a1-trip-k10-mpnetc-s42, ref: 20261028T014718Z-9d963909}
+    - {method_id: a2-nce-k5, label: "A2 graph-only GCN, InfoNCE, k=5", kind: gcl_run, model_id: ent-abl-graph-gcn-nce-mpnetc-s42, ref: 20261027T232541Z-d91ebd8e}
+    - {method_id: a2-trip-k5, label: "A2 graph-only GCN, triplet, k=5", kind: gcl_run, model_id: ent-p13-a2-trip-k5-mpnetc-s42, ref: 20261028T013157Z-8fceb08f}
+    - {method_id: a2-nce-k10, label: "A2 graph-only GCN, InfoNCE, k=10", kind: gcl_run, model_id: ent-p13-a2-nce-k10-mpnetc-s42, ref: 20261028T014901Z-9ca690b4}
+    - {method_id: a2-trip-k10, label: "A2 graph-only GCN, triplet, k=10", kind: gcl_run, model_id: ent-p13-a2-trip-k10-mpnetc-s42, ref: 20261028T015756Z-a2df5fbd}
+  evaluations:
+    - evaluation_id: set_pool
+      kind: gold_set_retrieval
+      params: {ks: [1, 5, 10], split: test, target_pool: data/processed/attack_cwe_ent/target_pool_union.json}

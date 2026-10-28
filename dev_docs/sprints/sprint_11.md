@@ -356,11 +356,11 @@ Question: where does the gain of `ent-dual-gcn-infonce-mpnetc-s42` (11.11) come 
 
 A1 and A2 are the requested ablations. A3 and A4 are controls that separate the learned projection from the graph convolution (A1 − A3 and A2 − A4 are the effect of message passing; A0 − A1 and A0 − A2 are the effect of adding the other branch). Because two graphs are disjoint components and DeepWalk vectors of the two graphs live in unrelated spaces, A2 and A4 can align the graphs only through what InfoNCE learns from the mpnet pseudo-pairs; they never read text at the input. Expect them to be weak. That is the point of the control, not a failure.
 
-- [ ] **Code (minimal):** add `model.branch: both | text | graph` (default `both`) and `model.message_passing: true | false` (default `true`) to the `gcn` `DualEncoder` in `src/cga/pipelines/gcl_train/models.py` and `build_dual_encoder`, read in `pipeline.py` with `model_cfg.get(...)`. A missing key must build the same model as today (same parameter shapes and creation order, so seed 42 still gives the same weights). The unused tower and skip are not created. Update the docstrings, and ask before changing the manifest schema: record `branch` and `message_passing` only if the manifest already stores the model config; otherwise keep them in `config.snapshot` and the model id.
-- [ ] **Tests:** unit tests for the four new shapes and parameter counts, that an unchanged config still gives 328,576 parameters, that `branch: text` output does not depend on `struct_emb` (change the DeepWalk input, the output is identical) and `branch: graph` does not depend on `text_emb`, and that `message_passing: false` does not depend on `edge_index`. Run `uv run pytest tests/unit -q`.
-- [ ] **Inputs:** reuse the 11.11 `training_data` run `s11c-rank_topk-k5/20261027T205523Z-ac890ca3` as it is (no new pseudo-pairs). Confirm that its manifest still lists the mpnet-chunk store `…20261027T194928Z-8cf38e55` and DeepWalk `…20261027T135210Z-3b18ba0c`.
-- [ ] **Reproduction gate (before any new run):** retrain A0 with the new code and the unchanged config; node embeddings must equal those of the 11.11 model `ent-dual-gcn-infonce-mpnetc-s42` (`20261027T205648Z-2aeb3259`) exactly. If they differ, fix the code before training anything else.
-- [ ] **Train** (`gcl_train`), four runs A1–A4:
+- [x] **Code (minimal):** add `model.branch: both | text | graph` (default `both`) and `model.message_passing: true | false` (default `true`) to the `gcn` `DualEncoder` in `src/cga/pipelines/gcl_train/models.py` and `build_dual_encoder`, read in `pipeline.py` with `model_cfg.get(...)`. A missing key must build the same model as today (same parameter shapes and creation order, so seed 42 still gives the same weights). The unused tower and skip are not created. Update the docstrings, and ask before changing the manifest schema: record `branch` and `message_passing` only if the manifest already stores the model config; otherwise keep them in `config.snapshot` and the model id.
+- [x] **Tests:** unit tests for the four new shapes and parameter counts, that an unchanged config still gives 328,576 parameters, that `branch: text` output does not depend on `struct_emb` (change the DeepWalk input, the output is identical) and `branch: graph` does not depend on `text_emb`, and that `message_passing: false` does not depend on `edge_index`. Run `uv run pytest tests/unit -q`.
+- [x] **Inputs:** reuse the 11.11 `training_data` run `s11c-rank_topk-k5/20261027T205523Z-ac890ca3` as it is (no new pseudo-pairs). Confirm that its manifest still lists the mpnet-chunk store `…20261027T194928Z-8cf38e55` and DeepWalk `…20261027T135210Z-3b18ba0c`.
+- [x] **Reproduction gate (before any new run):** retrain A0 with the new code and the unchanged config; node embeddings must equal those of the 11.11 model `ent-dual-gcn-infonce-mpnetc-s42` (`20261027T205648Z-2aeb3259`) exactly. If they differ, fix the code before training anything else.
+- [x] **Train** (`gcl_train`), four runs A1–A4:
   ```
   OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 uv run cga run gcl_train --dataset attack_cwe_ent --experiment unsup_u2 \
     --set seed=42 --set device=cpu --set gcl_train.loss.name=infonce \
@@ -370,27 +370,54 @@ A1 and A2 are the requested ablations. A3 and A4 are controls that separate the 
     --set gcl_train.inputs.training_data_run=20261027T205523Z-ac890ca3
   ```
   Check each model directory as in 11.2 (100 metric rows, loss lower at epoch 100 than epoch 1, one embedding row per universe node of 2,927, parameter count matches the table in the tests). Record loss at epochs 1 and 100 for A0–A4 side by side. Rerun A1 with the same seed and confirm identical node embeddings.
-- [ ] **Config** `configs/experiments/attack_cwe_ent_mpnet_ablation_eval.yaml` with the six evaluations of 11.11 (pinned run ids, same 11.10 ingests):
+- [x] **Config** `configs/experiments/attack_cwe_ent_mpnet_ablation_eval.yaml` with the six evaluations of 11.11 (pinned run ids, same 11.10 ingests):
   - **Ablation rows:** `ent-a0-full` (A0), `ent-a1-text`, `ent-a2-graph`, `ent-a3-text-lin`, `ent-a4-graph-lin`.
   - **Frozen references:** `ent-mpnet-chunk` (frozen text, no training), the DeepWalk store alone (`deepwalk-deepwalk`, the Sprint 9.4 reference, frozen), `ent-rand-s42/43/44`.
   - All trained rows share the 2,927-node universe, so the candidate set and `n_queries` match 11.11.
-- [ ] **Run** one `evaluate` per gold source (stix, capec, intersection, union) with the 11.10 ingests listed in 11.11. Add the row set `attack_ent_mpnet_ablation` to `scripts/unsup_summary.py`, with groups: frozen, A1/A2 (GCN), A3/A4 (no GCN), A0.
-- [ ] **Checks:** A0 and `ent-mpnet-chunk` rows equal the 11.11 numbers exactly (max difference 0.0, equal `n_queries`); a repeat of the union run is identical; `n_queries` equal across all methods. Frozen DeepWalk may need a separate evaluate run if it does not cover the 2,927-node universe; if so, say that it is on a different candidate set.
-- [ ] **Metrics and tables:** the same as 11.11 (ranking, assignment with predicted / correct / gold counts, set-based, lift over random; cosine only, CSLS not applicable), full and pool views. Add two difference columns: "branch effect" (A0 minus A1, A0 minus A2) and "GCN effect" (A1 minus A3, A2 minus A4).
-- [ ] **Report, without tuning:**
+- [x] **Run** one `evaluate` per gold source (stix, capec, intersection, union) with the 11.10 ingests listed in 11.11. Add the row set `attack_ent_mpnet_ablation` to `scripts/unsup_summary.py`, with groups: frozen, A1/A2 (GCN), A3/A4 (no GCN), A0.
+- [x] **Checks:** A0 and `ent-mpnet-chunk` rows equal the 11.11 numbers exactly (max difference 0.0, equal `n_queries`); a repeat of the union run is identical; `n_queries` equal across all methods. Frozen DeepWalk may need a separate evaluate run if it does not cover the 2,927-node universe; if so, say that it is on a different candidate set.
+- [x] **Metrics and tables:** the same as 11.11 (ranking, assignment with predicted / correct / gold counts, set-based, lift over random; cosine only, CSLS not applicable), full and pool views. Add two difference columns: "branch effect" (A0 minus A1, A0 minus A2) and "GCN effect" (A1 minus A3, A2 minus A4).
+- [x] **Report, without tuning:**
   - whether A1 (text only) matches A0, which tells whether DeepWalk adds anything to the 11.11 gain;
   - whether A2 (graph only) is above random and above frozen DeepWalk, which tells whether the mpnet pseudo-pairs can carry alignment into the structural space;
   - whether the graph convolution helps for each branch (A1 against A3, A2 against A4);
   - whether A1 and A3 beat frozen `ent-mpnet-chunk`, i.e. whether the 11.11 gain needs the graph at all;
   - hub check: the five most frequent CWEs in the top-10 lists for A1–A4;
   - limits: single seed (differences of about 0.01 are not tested against seed noise); one pseudo-pair draw; the loss still contains the graph-side terms for the single-branch runs; pool is built from gold and is optimistic; gold is transitive through CAPEC.
-- [ ] **Execution log** (last task of this phase): write `dev_docs/execution_logs/sprint_11_12.md` with the code change, run ids, reproduction gate result, training losses at epochs 1 and 100, determinism check, evaluate run ids per source, checks, tables, report, commands and limits. Then mark the 11.12 checkboxes.
+- [x] **Execution log** (last task of this phase): write `dev_docs/execution_logs/sprint_11_12.md` with the code change, run ids, reproduction gate result, training losses at epochs 1 and 100, determinism check, evaluate run ids per source, checks, tables, report, commands and limits. Then mark the 11.12 checkboxes.
+
+## Phase 11.13: Pseudo-pair `top_k` and loss ablation (pool view, set-based, k = 10)
+
+Question: for the mpnet-chunk dual (A0), text-only GCN (A1) and graph-only GCN (A2) of 11.12, do a larger pseudo-pair `top_k` (5 against 10) and the triplet loss (against InfoNCE) change the per-technique result? Compact: one table, no per-source or full-view tables.
+
+**Fixed protocol:** candidate view `pool` only (`target_pool_union.json`); gold source `union` only (11.10 ingest `20261027T194643Z-5d3f8baf`); `gold_set_retrieval`, split `test`, one query per technique, cutoff k = 10; report only Hits@1, Hits@5, Hits@10, Recall@10, Precision@10. Cosine only.
+
+**Fixed for all trained variants:** mpnet-chunk text store `20261027T194928Z-8cf38e55`, DeepWalk store `20261027T135210Z-3b18ba0c`, `unsup_u2` (hidden / out 128, dropout 0, Adam lr 1e-3, 100 epochs), `alpha 0.5`, seed 42, CPU with one thread, `triplet` margin 1.0, `infonce` temperature 0.1. `rank_topk` takes `k` for the positives and the (bottom-`k`) negatives together, as in 11.1; text and graph sides use the same `k`.
+
+**Varied:** `k` in {5, 10} (new sampler id `s11c-rank_topk-k10`; k = 5 reuses `s11c-rank_topk-k5`, run `20261027T205523Z-ac890ca3`); loss in {InfoNCE, triplet}; model in {A0, A1, A2}. Rows that already exist with the identical configuration are reused (their retrains are bit-identical, 11.12): k = 5 with InfoNCE for A0, A1, A2 and k = 5 with triplet for A0. Eight runs are new.
+
+| Row | Model | `k` | Loss | Model id | Source |
+|---|---|---|---|---|---|
+| mpnet-chunk | frozen | – | – | – | store `20261027T194928Z-8cf38e55` |
+| DeepWalk | frozen | – | – | – | store `20261027T135210Z-3b18ba0c` |
+| A0 / A1 / A2 | `branch` both / text / graph | 5 | InfoNCE | 11.11 / 11.12 models | reuse |
+| A0 | both | 5 | triplet | `ent-dual-gcn-triplet-mpnetc-s42` | reuse (11.11) |
+| A1, A2 | text, graph | 5 | triplet | `ent-p13-{a1,a2}-trip-k5-mpnetc-s42` | new |
+| A0 / A1 / A2 | both / text / graph | 10 | InfoNCE | `ent-p13-{a0,a1,a2}-nce-k10-mpnetc-s42` | new |
+| A0 / A1 / A2 | both / text / graph | 10 | triplet | `ent-p13-{a0,a1,a2}-trip-k10-mpnetc-s42` | new |
+
+- [x] **Pseudo-pairs, k = 10:** `training_data` with `--set training_data.sampler.k=10 --set training_data.sampler.sampler_id=s11c-rank_topk-k10`, the same pinned text, graph and ingest runs as `s11c-rank_topk-k5`, seed 42. Check universe 2,927, examples 29,270 (10 per anchor), `held_out` false, and the share of gold pairs among the distinct cross-graph pairs next to k = 5 (62 of 13,828).
+- [x] **Train** the eight new runs with the 11.12 command (`gcl_train.model.branch`, `message_passing=true`, `gcl_train.loss.name`, `gcl_train.inputs.training_data_sampler_id`, `…training_data_run`, `OMP_NUM_THREADS=1`). Check each: 100 metric rows, loss lower at epoch 100, 2,927 embedding rows, the resolved config shows the intended `k`, loss, branch and training data run. Record the exact configuration of every run in the log (table of model id, run id, sampler id, training data run, loss and its parameters, branch, parameters).
+- [x] **Config** `configs/experiments/attack_cwe_ent_p13_eval.yaml`: the 14 rows above (the 6 reused models pinned by run id), one evaluation `set_pool` with `ks: [1, 5, 10]`, `split: test`, `target_pool` as in 11.11. Run `evaluate` once on the union ingest.
+- [x] **Checks:** reused and frozen rows reproduce the 11.12 values (Hits@10, Recall@10, Precision@10 of `set_pool`) exactly; `n_queries` is 183 for all rows.
+- [x] **One table** (rows as above; columns Hits@1, Hits@5, Hits@10, Recall@10, Precision@10), and a short report: effect of `k` (5 against 10) and of the loss for each of A0, A1, A2, and whether the 11.12 ordering (A1 at least A0 above A2) holds. State the limits: single seed, one gold source and view, pool optimistic, differences of a few hundredths not tested against seed noise.
+- [x] **Execution log** (last task): `dev_docs/execution_logs/sprint_11_13.md` with the run configuration table, run ids, checks, the table, the report, commands and limits. Then mark the 11.13 checkboxes.
 
 ## Out of scope
 
 - Plots, fusion rows, and any change to the existing `gold_alignment` / `gold_alignment_prf` scoring.
 - Other text encoders (except `multi-qa-mpnet-base-dot-v1` and `BAAI/bge-base-en-v1.5` in Phases 11.9–11.11, and SecRoBERTa as the reference), other samplers, GAT, other seeds, hyperparameter changes.
 - Phases 11.9–11.11: no fine-tuning of the sentence encoders, no other seeds or loss settings, no query/passage prefixes, no CSLS or centring, no change to any evaluator.
-- Phase 11.12: only InfoNCE, seed 42 and the mpnet-chunk pseudo-pairs; no GAT, no new text store, no new sampler. The only code change is the `branch` / `message_passing` options of the `gcn` `DualEncoder`; no evaluator changes.
+- Phase 11.13: only `k` in {5, 10}, InfoNCE and triplet, seed 42, union gold and the pool view; no other sampler, text store, seed or hyperparameter, no code change. (11.12 itself: only InfoNCE, seed 42 and the mpnet-chunk pseudo-pairs; no GAT, no new text store, no new sampler. The only code change is the `branch` / `message_passing` options of the `gcn` `DualEncoder`; no evaluator changes.)
 - Phase 11.10 changes only the `description_only` text variant, the `chunking` option of the sentence embedder and the summary-script row set; no evaluator changes.
 - Phases 11.1–11.5: no code changes. Phase 11.6 changes only the CWE description parser and `gcl_train` seeding; Phase 11.7 adds only the new evaluator, its metric helper and the summary-script tables.

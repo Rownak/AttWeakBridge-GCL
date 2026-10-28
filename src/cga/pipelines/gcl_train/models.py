@@ -60,35 +60,65 @@ class GAT(nn.Module):
         return x
 
 
+_BRANCHES = ("both", "text", "graph")
+
+
 class DualEncoder(nn.Module):
     """Fuses a text-feature GNN tower and a structural-feature GNN tower into one embedding.
 
+    The default (``branch="both"``, message passing on) is the paper model. Sprint 11.12 ablations
+    drop a whole branch (``branch="text"`` / ``"graph"``) or the graph convolutions
+    (``message_passing=False``, leaving only the ``fc1`` / ``fc2`` skip projections). Unused
+    modules are not created, so the default model has the same parameters in the same creation
+    order (and therefore the same seeded initialisation) as before the options existed.
+
     Args:
-        graph_model1: Tower consuming text embeddings as node features.
-        graph_model2: Tower consuming structural embeddings as node features.
+        graph_model1: Tower consuming text embeddings as node features (``None`` when unused).
+        graph_model2: Tower consuming structural embeddings as node features (``None`` when unused).
         text_dim: Input text-embedding dimension.
         struct_dim: Input structural-embedding dimension.
         out_channels: Width of the projected text branch (``fc1``) and of
             ``graph_model1``'s output.
         hidden_dim: Final fused embedding dimension.
+        branch: ``"both"``, ``"text"`` (the structural input is ignored) or ``"graph"`` (the text
+            input is ignored).
+        message_passing: When false the GNN towers are absent and ``edge_index`` is ignored.
+
+    Raises:
+        ValueError: If ``branch`` is unknown.
     """
 
     def __init__(
         self,
-        graph_model1: nn.Module,
-        graph_model2: nn.Module,
+        graph_model1: nn.Module | None,
+        graph_model2: nn.Module | None,
         *,
         text_dim: int,
         struct_dim: int,
         out_channels: int,
         hidden_dim: int,
+        branch: str = "both",
+        message_passing: bool = True,
     ) -> None:
         super().__init__()
-        self.graph_model1 = graph_model1
-        self.graph_model2 = graph_model2
-        self.fc1 = nn.Linear(text_dim, out_channels)
-        self.fc2 = nn.Linear(struct_dim, struct_dim)
-        self.fc3 = nn.Linear(2 * out_channels + 2 * struct_dim, hidden_dim)
+        if branch not in _BRANCHES:
+            raise ValueError(f"Unknown branch '{branch}'; expected one of {_BRANCHES}")
+        self.branch = branch
+        self.message_passing = message_passing
+        use_text, use_graph = branch in ("both", "text"), branch in ("both", "graph")
+        # Registration order (towers, fc1, fc2, fc3) is the original one; keep it for state_dict parity.
+        if use_text and message_passing:
+            self.graph_model1 = graph_model1
+        if use_graph and message_passing:
+            self.graph_model2 = graph_model2
+        width = 0
+        if use_text:
+            self.fc1 = nn.Linear(text_dim, out_channels)
+            width += out_channels * (2 if message_passing else 1)
+        if use_graph:
+            self.fc2 = nn.Linear(struct_dim, struct_dim)
+            width += struct_dim * (2 if message_passing else 1)
+        self.fc3 = nn.Linear(width, hidden_dim)
 
     def forward(
         self,
@@ -98,12 +128,16 @@ class DualEncoder(nn.Module):
         edge_type: torch.Tensor | None = None,
     ) -> torch.Tensor:
         # edge_type is accepted for interface parity with ResidualAdapterEncoder and ignored here.
-        graph_emb1 = self.graph_model1(text_emb, edge_index)
-        graph_emb2 = self.graph_model2(struct_emb, edge_index)
-        text_proj = self.fc1(text_emb)
-        struct_proj = self.fc2(struct_emb)
-        combined = torch.cat([text_proj, graph_emb1, struct_proj, graph_emb2], dim=1)
-        return self.fc3(combined)
+        parts: list[torch.Tensor] = []
+        if self.branch in ("both", "text"):
+            parts.append(self.fc1(text_emb))
+            if self.message_passing:
+                parts.append(self.graph_model1(text_emb, edge_index))
+        if self.branch in ("both", "graph"):
+            parts.append(self.fc2(struct_emb))
+            if self.message_passing:
+                parts.append(self.graph_model2(struct_emb, edge_index))
+        return self.fc3(torch.cat(parts, dim=1))
 
 
 def build_dual_encoder(
@@ -114,6 +148,8 @@ def build_dual_encoder(
     hidden_dim: int,
     out_dim: int,
     gat_heads: tuple[int, int] = (8, 1),
+    branch: str = "both",
+    message_passing: bool = True,
 ) -> DualEncoder:
     """Construct a :class:`DualEncoder` with matching GCN or GAT towers.
 
@@ -128,18 +164,34 @@ def build_dual_encoder(
             (mirroring the legacy ``feature_2`` tower, which projects
             ``struct_dim -> struct_dim`` rather than to a shared ``out_dim``).
         gat_heads: Attention heads for the GAT towers; ignored for GCN.
+        branch: ``"both"`` (default), ``"text"`` or ``"graph"``; see :class:`DualEncoder`.
+        message_passing: ``False`` builds no GNN towers (Sprint 11.12 controls).
 
     Raises:
-        ValueError: If ``encoder`` is not ``"gcn"`` or ``"gat"``.
+        ValueError: If ``encoder`` is not ``"gcn"`` or ``"gat"``, or ``branch`` is unknown.
     """
-    if encoder == "gcn":
-        graph_model1: nn.Module = GCN(in_channels=text_dim, out_channels=out_dim, hid_dim=hidden_dim)
-        graph_model2: nn.Module = GCN(in_channels=struct_dim, out_channels=struct_dim, hid_dim=struct_dim)
-    elif encoder == "gat":
-        graph_model1 = GAT(in_channels=text_dim, out_channels=out_dim, hid_dim=hidden_dim, heads=gat_heads)
-        graph_model2 = GAT(in_channels=struct_dim, out_channels=struct_dim, hid_dim=struct_dim, heads=gat_heads)
-    else:
+    if encoder not in ("gcn", "gat"):
         raise ValueError(f"Unknown encoder '{encoder}'; expected 'gcn' or 'gat'")
+    if branch not in _BRANCHES:
+        raise ValueError(f"Unknown branch '{branch}'; expected one of {_BRANCHES}")
+
+    # Only the towers that are used are built, so an ablation does not consume random numbers for
+    # modules it drops; the default ("both", message passing) builds both in the original order.
+    graph_model1: nn.Module | None = None
+    graph_model2: nn.Module | None = None
+    if message_passing:
+        if encoder == "gcn":
+            if branch in ("both", "text"):
+                graph_model1 = GCN(in_channels=text_dim, out_channels=out_dim, hid_dim=hidden_dim)
+            if branch in ("both", "graph"):
+                graph_model2 = GCN(in_channels=struct_dim, out_channels=struct_dim, hid_dim=struct_dim)
+        else:
+            if branch in ("both", "text"):
+                graph_model1 = GAT(in_channels=text_dim, out_channels=out_dim, hid_dim=hidden_dim, heads=gat_heads)
+            if branch in ("both", "graph"):
+                graph_model2 = GAT(
+                    in_channels=struct_dim, out_channels=struct_dim, hid_dim=struct_dim, heads=gat_heads
+                )
 
     return DualEncoder(
         graph_model1,
@@ -148,6 +200,8 @@ def build_dual_encoder(
         struct_dim=struct_dim,
         out_channels=out_dim,
         hidden_dim=hidden_dim,
+        branch=branch,
+        message_passing=message_passing,
     )
 
 

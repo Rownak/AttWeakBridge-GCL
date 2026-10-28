@@ -44,6 +44,66 @@ def test_dual_encoder_handles_no_edges() -> None:
     assert output.shape == (n_nodes, 8)
 
 
+# ---- single-branch / no-message-passing ablations (Sprint 11.12) --------------------------------
+
+
+def _n_params(model: torch.nn.Module) -> int:
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+
+def test_default_dual_encoder_is_unchanged_by_the_ablation_options() -> None:
+    assert _n_params(build_dual_encoder(text_dim=768, struct_dim=128, encoder="gcn", hidden_dim=128, out_dim=128)) == 328_576
+    torch.manual_seed(0)
+    plain = build_dual_encoder(text_dim=4, struct_dim=3, encoder="gcn", hidden_dim=8, out_dim=8)
+    torch.manual_seed(0)
+    explicit = build_dual_encoder(
+        text_dim=4, struct_dim=3, encoder="gcn", hidden_dim=8, out_dim=8, branch="both", message_passing=True
+    )
+    assert list(plain.state_dict()) == list(explicit.state_dict())
+    assert all(torch.equal(a, b) for a, b in zip(plain.state_dict().values(), explicit.state_dict().values()))
+
+
+@pytest.mark.parametrize(
+    ("branch", "message_passing", "n_params"),
+    [
+        ("text", True, 768 * 128 + 128 + (768 * 128 + 128 + 128 * 128 + 128) + 256 * 128 + 128),
+        ("graph", True, 128 * 128 + 128 + 2 * (128 * 128 + 128) + 256 * 128 + 128),
+        ("text", False, 768 * 128 + 128 + 128 * 128 + 128),
+        ("graph", False, 128 * 128 + 128 + 128 * 128 + 128),
+    ],
+)
+def test_single_branch_shapes_and_parameter_counts(branch: str, message_passing: bool, n_params: int) -> None:
+    model = build_dual_encoder(
+        text_dim=768, struct_dim=128, encoder="gcn", hidden_dim=128, out_dim=128, branch=branch, message_passing=message_passing
+    )
+    out = model(torch.randn(5, 768), torch.randn(5, 128), torch.tensor([[0, 1], [1, 0]]))
+    assert out.shape == (5, 128)
+    assert _n_params(model) == n_params
+
+
+def test_single_branch_ignores_the_other_input_and_no_message_passing_ignores_edges() -> None:
+    edges = torch.tensor([[0, 1, 2], [1, 0, 3]])
+    text, struct = torch.randn(4, 6), torch.randn(4, 5)
+    text_only = build_dual_encoder(text_dim=6, struct_dim=5, encoder="gcn", hidden_dim=8, out_dim=8, branch="text").eval()
+    graph_only = build_dual_encoder(text_dim=6, struct_dim=5, encoder="gcn", hidden_dim=8, out_dim=8, branch="graph").eval()
+    assert torch.equal(text_only(text, struct, edges), text_only(text, struct * 3 + 1, edges))
+    assert not torch.equal(text_only(text, struct, edges), text_only(text * 3 + 1, struct, edges))
+    assert torch.equal(graph_only(text, struct, edges), graph_only(text * 3 + 1, struct, edges))
+    assert not torch.equal(graph_only(text, struct, edges), graph_only(text, struct * 3 + 1, edges))
+    for branch in ("text", "graph", "both"):
+        linear = build_dual_encoder(
+            text_dim=6, struct_dim=5, encoder="gcn", hidden_dim=8, out_dim=8, branch=branch, message_passing=False
+        ).eval()
+        assert torch.equal(linear(text, struct, edges), linear(text, struct, torch.empty((2, 0), dtype=torch.long)))
+    conv = build_dual_encoder(text_dim=6, struct_dim=5, encoder="gcn", hidden_dim=8, out_dim=8, branch="text").eval()
+    assert not torch.equal(conv(text, struct, edges), conv(text, struct, torch.empty((2, 0), dtype=torch.long)))
+
+
+def test_build_dual_encoder_rejects_unknown_branch() -> None:
+    with pytest.raises(ValueError, match="branch"):
+        build_dual_encoder(text_dim=4, struct_dim=4, encoder="gcn", hidden_dim=8, out_dim=8, branch="none")
+
+
 # ---- ResidualAdapterEncoder (SRGA) -------------------------------------------------------------
 
 from cga.pipelines.gcl_train.models import build_residual_adapter_encoder  # noqa: E402
